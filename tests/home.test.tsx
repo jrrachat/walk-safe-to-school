@@ -1,4 +1,4 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -73,8 +73,10 @@ it("stores Home locally without requiring an account", async () => {
   ).toHaveProperty("value", "Home");
   expect(screen.getByRole("button", { name: "From home" })).toBeTruthy();
   expect(Object.keys(localStorage).sort()).toEqual([
+    "walkwise-avoid-busy-roads",
     "walkwise-home",
     "walkwise-requirements",
+    "walkwise-requirements-version",
   ]);
   expect(JSON.parse(localStorage.getItem("walkwise-home") || "null")).toEqual({
     area: homeAddress.area,

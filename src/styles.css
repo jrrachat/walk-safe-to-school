@@ -137,6 +137,81 @@ main {
   position: absolute;
   inset: 0;
 }
+
+.map-key {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid #dce3ec;
+  border-radius: 10px;
+  background: #fff;
+  color: #33465d;
+  font-size: 11px;
+}
+.map-key summary {
+  min-height: 34px;
+  padding: 9px 11px;
+  color: #263b55;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.map-key[open] summary {
+  border-bottom: 1px solid #e3e8ee;
+}
+.map-key-items {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+.map-key-items > span {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-weight: 600;
+}
+.map-key-image {
+  display: block;
+  width: 74px;
+  height: 34px;
+  object-fit: cover;
+  border: 1px solid #ccd4dd;
+  border-radius: 5px;
+}
+.map-key-walking {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  justify-self: center;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  padding: 4px;
+  background: #fff;
+  color: #145cdb;
+  box-shadow: 0 1px 4px rgba(30, 51, 77, 0.22);
+}
+.map-key-walking svg {
+  width: 100%;
+  height: 100%;
+}
+.map-key-walking.signalized {
+  color: #26845d;
+}
+.map-key-warning-strip {
+  display: block;
+  width: 64px;
+  height: 6px;
+  justify-self: center;
+  border: 1px solid #fff;
+  border-radius: 2px;
+  background: #d7352f;
+  box-shadow: 0 1px 3px rgba(87, 25, 22, 0.28);
+}
+
 .planner-title {
   margin-bottom: 25px;
 }
@@ -450,9 +525,6 @@ main {
 }
 .primary:hover:not(:disabled) {
   background: #1955bf;
-}
-.start-walk {
-  width: 100%;
 }
 .secondary {
   display: inline-flex;
@@ -1249,37 +1321,32 @@ select {
     padding-top: 10px;
     margin-top: 2px;
   }
-  .start-walk {
-    min-height: 46px;
-  }
 }
 
 .crossing-marker {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid #b9c7d9;
-  border-radius: 999px;
-  padding: 4px 7px;
-  background: #fff;
-  color: #304761;
-  box-shadow: 0 2px 7px rgba(37, 56, 82, 0.2);
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.crossing-marker::before {
-  content: "";
-  width: 7px;
-  height: 7px;
+  display: grid;
+  width: var(--crossing-marker-size, 19px);
+  height: var(--crossing-marker-size, 19px);
+  place-items: center;
+  box-sizing: border-box;
+  border: 1.5px solid #145cdb;
   border-radius: 50%;
-  background: #145cdb;
+  padding: 3px;
+  background: #fff;
+  color: #145cdb;
+  box-shadow: 0 1px 5px rgba(30, 51, 77, 0.3);
 }
-.crossing-marker.signalized::before {
-  background: #26845d;
+.crossing-marker[hidden] {
+  display: none;
 }
-.crossing-marker.stop-sign::before {
-  background: #bf3f37;
+.crossing-marker svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.crossing-marker.signalized {
+  border-color: #26845d;
+  color: #26845d;
 }
 .route-violation-marker {
   display: flex;
@@ -1302,6 +1369,59 @@ select {
   flex: 0 0 8px;
   border-radius: 50%;
   background: #c43f35;
+}
+.route-violation-marker.speed-warning {
+  position: relative;
+  display: grid;
+  grid-template-columns: 7px minmax(0, auto);
+  column-gap: 5px;
+  row-gap: 0;
+  max-width: 132px;
+  padding: 4px 7px;
+  border-radius: 8px;
+  border-color: #a53b24;
+  background: #fff8f2;
+  color: #8c2e1b;
+  font-size: 9px;
+  line-height: 1.15;
+  box-shadow: 0 3px 12px rgba(93, 35, 22, 0.3);
+}
+.route-violation-marker.speed-warning::before {
+  grid-row: 1 / span 2;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+}
+.speed-warning-road {
+  min-width: 0;
+  overflow: hidden;
+  color: #6f3b2e;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.speed-warning-limit {
+  color: #9c2f1d;
+  font-size: 11px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.route-violation-marker.speed-warning::after {
+  content: "";
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  width: 11px;
+  height: 11px;
+  border-right: 1px solid #a53b24;
+  border-bottom: 1px solid #a53b24;
+  background: #fff8f2;
+  transform: translateX(-50%) rotate(45deg);
+}
+.route-violation-marker.sidewalk-warning {
+  border-color: #c6572d;
+  background: #fff9f5;
+  color: #943817;
 }
 
 .docs-page h2 {

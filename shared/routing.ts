@@ -25,13 +25,15 @@ export type RequirementChecks = Record<RequirementKey, RequirementCheck>;
 export type RouteCrossing = {
   coordinate: Coordinate;
   signalized: boolean;
-  stopSign?: boolean;
   marked?: boolean;
 };
 export type RouteViolation = {
   coordinate: Coordinate;
   requirement: RequirementKey;
   label: string;
+  roadName?: string;
+  speedLimitMph?: number;
+  geometry?: Coordinate[];
 };
 export const requirementSchema = z.object({
   speed: z.boolean(),
@@ -39,9 +41,9 @@ export const requirementSchema = z.object({
   sidewalks: z.boolean(),
 });
 export const defaultRequirements: Requirements = {
-  speed: false,
-  crosswalks: false,
-  sidewalks: false,
+  speed: true,
+  crosswalks: true,
+  sidewalks: true,
 };
 export const requirementLabels: Record<RequirementKey, string> = {
   speed: "No roads over 35 mph",
@@ -110,6 +112,7 @@ export type Route = {
   checks?: RequirementChecks;
   crossings?: RouteCrossing[];
   violations?: RouteViolation[];
+  alerts?: RouteViolation[];
 };
 export function distance(a: Coordinate, b: Coordinate) {
   const rad = Math.PI / 180;
@@ -133,7 +136,6 @@ export function displayCrossings(
     );
     if (existing) {
       existing.signalized ||= crossing.signalized;
-      existing.stopSign ||= crossing.stopSign;
       existing.marked ||= crossing.marked;
     } else visible.push({ ...crossing });
     return visible;

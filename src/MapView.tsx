@@ -3,7 +3,7 @@ import * as maplibregl from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 // Vite must bundle the separate MapLibre 6 worker, including its imports.
 maplibregl.setWorkerUrl(workerUrl);
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Footprints } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import PlaceIcon from "./PlaceIcon";
 import { displayCrossings, distance } from "../shared/routing";
@@ -28,6 +28,62 @@ type Props = {
   bottomInset?: SheetState;
   onPick: (place: Place) => void;
 };
+export function crossingWarningStrip(
+  coordinate: Coordinate,
+  route: Coordinate[],
+  halfLengthMeters = 7,
+): Coordinate[] {
+  if (route.length < 2) return [];
+  const latitudeRadians = (coordinate[1] * Math.PI) / 180;
+  const metersPerLongitude = 111_320 * Math.cos(latitudeRadians);
+  const metersPerLatitude = 111_320;
+  let nearestDistance = Infinity;
+  let nearestX = 0;
+  let nearestY = 0;
+  let directionX = 0;
+  let directionY = 0;
+
+  for (let index = 0; index < route.length - 1; index++) {
+    const startX = (route[index][0] - coordinate[0]) * metersPerLongitude;
+    const startY = (route[index][1] - coordinate[1]) * metersPerLatitude;
+    const endX = (route[index + 1][0] - coordinate[0]) * metersPerLongitude;
+    const endY = (route[index + 1][1] - coordinate[1]) * metersPerLatitude;
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared < 0.01) continue;
+    const amount = Math.max(
+      0,
+      Math.min(1, -(startX * dx + startY * dy) / lengthSquared),
+    );
+    const matchX = startX + amount * dx;
+    const matchY = startY + amount * dy;
+    const matchDistance = Math.hypot(matchX, matchY);
+    if (matchDistance < nearestDistance) {
+      nearestDistance = matchDistance;
+      nearestX = matchX;
+      nearestY = matchY;
+      directionX = dx;
+      directionY = dy;
+    }
+  }
+
+  const directionLength = Math.hypot(directionX, directionY);
+  if (!Number.isFinite(nearestDistance) || directionLength < 0.1) return [];
+  const perpendicularX = (-directionY / directionLength) * halfLengthMeters;
+  const perpendicularY = (directionX / directionLength) * halfLengthMeters;
+  return [
+    [
+      coordinate[0] + (nearestX - perpendicularX) / metersPerLongitude,
+      coordinate[1] + (nearestY - perpendicularY) / metersPerLatitude,
+    ],
+    [
+      coordinate[0] + (nearestX + perpendicularX) / metersPerLongitude,
+      coordinate[1] + (nearestY + perpendicularY) / metersPerLatitude,
+    ],
+  ];
+}
+
 export default function MapView({
   routes,
   selected,
@@ -53,6 +109,17 @@ export default function MapView({
   const [ready, setReady] = useState(false),
     [error, setError] = useState("");
   const currentRoute = routes.find((route) => route.category === selected);
+  const routeDiagnostics = [
+    ...(currentRoute?.alerts || []),
+    ...(currentRoute?.violations || []),
+  ].filter(
+    (warning, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.requirement === warning.requirement &&
+          distance(candidate.coordinate, warning.coordinate) < 8,
+      ) === index,
+  );
   const routeDataKey =
     selected +
     "|" +
@@ -65,10 +132,14 @@ export default function MapView({
             .map((coordinate) => coordinate.join(","))
             .join(";") +
           ":" +
-          (route.violations || [])
+          [...(route.alerts || []), ...(route.violations || [])]
             .map(
               (violation) =>
-                violation.requirement + "@" + violation.coordinate.join(","),
+                violation.requirement +
+                "@" +
+                violation.coordinate.join(",") +
+                ":" +
+                violation.label,
             )
             .join(";"),
       )
@@ -135,9 +206,8 @@ export default function MapView({
         setError("");
       });
       instance.on("error", (event) => {
-        if ("sourceId" in event && event.sourceId === "osm")
-          setError("Street map unavailable. Your route is still shown.");
-        else setError("The map could not load. Try reloading this page.");
+        if ("sourceId" in event && event.sourceId === "osm") return;
+        setError("The map could not load. Try reloading this page.");
       });
       instance.addControl(
         new maplibregl.NavigationControl({ showCompass: false }),
@@ -249,6 +319,95 @@ export default function MapView({
         },
       });
     }
+    const sidewalkWarningData: FeatureCollection = {
+      type: "FeatureCollection",
+      features: routeDiagnostics.flatMap((warning) =>
+        warning.requirement === "sidewalks" &&
+        warning.geometry &&
+        warning.geometry.length > 1
+          ? [
+              {
+                type: "Feature" as const,
+                properties: { label: warning.label },
+                geometry: {
+                  type: "LineString" as const,
+                  coordinates: warning.geometry,
+                },
+              },
+            ]
+          : [],
+      ),
+    };
+    const sidewalkWarningSource = m.getSource("sidewalk-warnings") as
+      maplibregl.GeoJSONSource | undefined;
+    if (sidewalkWarningSource)
+      sidewalkWarningSource.setData(sidewalkWarningData);
+    else {
+      m.addSource("sidewalk-warnings", {
+        type: "geojson",
+        data: sidewalkWarningData,
+      });
+      m.addLayer({
+        id: "sidewalk-warning-stretches",
+        type: "line",
+        source: "sidewalk-warnings",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#c85524",
+          "line-width": 7,
+          "line-opacity": 0.92,
+        },
+      });
+    }
+    const unmarkedCrossingData: FeatureCollection = {
+      type: "FeatureCollection",
+      features: currentRoute
+        ? displayCrossings(currentRoute.crossings || []).flatMap((crossing) => {
+            if (
+              crossing.marked !== false ||
+              (end && distance(crossing.coordinate, end.coordinate) <= 180)
+            )
+              return [];
+            const strip = crossingWarningStrip(
+              crossing.coordinate,
+              currentRoute.coordinates,
+            );
+            return strip.length === 2
+              ? [
+                  {
+                    type: "Feature" as const,
+                    properties: { label: "Suspected no crossing markings" },
+                    geometry: {
+                      type: "LineString" as const,
+                      coordinates: strip,
+                    },
+                  },
+                ]
+              : [];
+          })
+        : [],
+    };
+    const unmarkedCrossingSource = m.getSource("unmarked-crossing-warnings") as
+      maplibregl.GeoJSONSource | undefined;
+    if (unmarkedCrossingSource)
+      unmarkedCrossingSource.setData(unmarkedCrossingData);
+    else {
+      m.addSource("unmarked-crossing-warnings", {
+        type: "geojson",
+        data: unmarkedCrossingData,
+      });
+      m.addLayer({
+        id: "suspected-unmarked-crossings",
+        type: "line",
+        source: "unmarked-crossing-warnings",
+        layout: { "line-cap": "butt", "line-join": "round" },
+        paint: {
+          "line-color": "#d7352f",
+          "line-width": 6,
+          "line-opacity": 0.96,
+        },
+      });
+    }
     lastRouteDataKey.current = routeDataKey;
     const endpointKey = currentRoute
       ? start.coordinate.join(",") + "|" + end?.coordinate.join(",")
@@ -326,46 +485,70 @@ export default function MapView({
   }, [start, showStart, end, ready, places]);
   useEffect(() => {
     const m = map.current;
-    if (
-      !m ||
-      !ready ||
-      currentRoute?.violations?.length ||
-      !currentRoute?.crossings?.length
-    )
-      return;
-    const markers = displayCrossings(currentRoute.crossings).map(
-      (crossing, index) => {
-        const element = document.createElement("div");
-        element.className =
-          "crossing-marker" +
-          (crossing.signalized
-            ? " signalized"
-            : crossing.stopSign
-              ? " stop-sign"
-              : "");
-        const label = crossing.signalized
-          ? "Crosswalk with lights"
-          : crossing.stopSign
-            ? "Crosswalk with stop sign"
-            : crossing.marked === false
-              ? "Road crossing"
-              : "Crosswalk";
-        element.textContent = label;
-        element.setAttribute("aria-label", label + " " + (index + 1));
-        return new maplibregl.Marker({ element, anchor: "center" })
-          .setLngLat(crossing.coordinate)
-          .addTo(m);
-      },
-    );
-    return () => markers.forEach((marker) => marker.remove());
-  }, [currentRoute, ready]);
+    if (!m || !ready || !currentRoute?.crossings?.length) return;
+    const roots: ReturnType<typeof createRoot>[] = [];
+    const crossings = displayCrossings(currentRoute.crossings)
+      .filter((crossing) => crossing.marked !== false)
+      .sort((a, b) => Number(b.signalized) - Number(a.signalized));
+    const records = crossings.map((crossing, index) => {
+      const element = document.createElement("div");
+      element.className =
+        "crossing-marker" + (crossing.signalized ? " signalized" : "");
+      const label = crossing.signalized
+        ? "Crossing symbol (crossing lights)"
+        : "Crossing symbol";
+      element.setAttribute("aria-label", label + " " + (index + 1));
+      element.title = label;
+      const root = createRoot(element);
+      root.render(<Footprints aria-hidden="true" strokeWidth={2.4} />);
+      roots.push(root);
+      const marker = new maplibregl.Marker({ element, anchor: "center" })
+        .setLngLat(crossing.coordinate)
+        .addTo(m);
+      return { crossing, element, marker };
+    });
+    const updateMarkerLayout = () => {
+      const zoom = m.getZoom();
+      const size = Math.max(15, Math.min(22, Math.round(16 + (zoom - 13) * 2)));
+      const visible: { x: number; y: number }[] = [];
+      for (const record of records) {
+        record.element.style.setProperty("--crossing-marker-size", size + "px");
+        const point = m.project(record.crossing.coordinate);
+        const overlaps = visible.some(
+          (candidate) =>
+            Math.hypot(candidate.x - point.x, candidate.y - point.y) < size + 4,
+        );
+        record.element.hidden = overlaps;
+        if (!overlaps) visible.push(point);
+      }
+    };
+    updateMarkerLayout();
+    m.on("moveend", updateMarkerLayout);
+    return () => {
+      m.off("moveend", updateMarkerLayout);
+      records.forEach(({ marker }) => marker.remove());
+      roots.forEach((root) => queueMicrotask(() => root.unmount()));
+    };
+  }, [currentRoute, ready, routeDataKey]);
   useEffect(() => {
     const m = map.current;
-    if (!m || !ready || !currentRoute?.violations?.length) return;
-    const groups: { coordinate: Coordinate; labels: string[] }[] = [];
-    for (const violation of currentRoute.violations) {
+    if (!m || !ready || !routeDiagnostics.length) return;
+    const groups: {
+      coordinate: Coordinate;
+      labels: string[];
+      requirement: "speed" | "sidewalks";
+      roadName?: string;
+      speedLimitMph?: number;
+    }[] = [];
+    for (const violation of routeDiagnostics) {
+      if (violation.requirement === "crosswalks") continue;
       const existing = groups.find(
-        (group) => distance(group.coordinate, violation.coordinate) <= 35,
+        (group) =>
+          group.requirement === violation.requirement &&
+          distance(group.coordinate, violation.coordinate) <= 35 &&
+          (violation.requirement !== "speed" ||
+            (group.roadName === violation.roadName &&
+              group.speedLimitMph === violation.speedLimitMph)),
       );
       if (existing) {
         if (!existing.labels.includes(violation.label))
@@ -374,18 +557,42 @@ export default function MapView({
         groups.push({
           coordinate: violation.coordinate,
           labels: [violation.label],
+          requirement: violation.requirement,
+          roadName: violation.roadName,
+          speedLimitMph: violation.speedLimitMph,
         });
       }
     }
-    const markers = groups.slice(0, 14).map((group, index) => {
+    const markers = groups.map((group, index) => {
       const element = document.createElement("div");
-      element.className = "route-violation-marker";
-      element.textContent = group.labels.join(" · ");
+      element.className =
+        "route-violation-marker " +
+        (group.requirement === "speed" ? "speed-warning" : "sidewalk-warning");
+      const fullLabel = group.labels.join(" \u00b7 ");
+      if (group.requirement === "speed") {
+        const road = document.createElement("span");
+        road.className = "speed-warning-road";
+        road.textContent = group.roadName || "Road";
+        const limit = document.createElement("strong");
+        limit.className = "speed-warning-limit";
+        limit.textContent =
+          typeof group.speedLimitMph === "number"
+            ? group.speedLimitMph + " mph"
+            : "Speed unknown";
+        element.append(road, limit);
+        element.title = fullLabel;
+      } else {
+        element.textContent = fullLabel;
+      }
       element.setAttribute(
         "aria-label",
         "Route problem " + (index + 1) + ": " + group.labels.join(", "),
       );
-      return new maplibregl.Marker({ element, anchor: "center" })
+      return new maplibregl.Marker({
+        element,
+        anchor: group.requirement === "speed" ? "bottom" : "center",
+        offset: group.requirement === "speed" ? [0, -8] : [0, 0],
+      })
         .setLngLat(group.coordinate)
         .addTo(m);
     });

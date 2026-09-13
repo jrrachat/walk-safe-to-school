@@ -27,14 +27,27 @@ type Trip = {
   route: Route;
   destination: Place;
 };
+const requirementDefaultsVersion = "all-checked-v2";
 const initialRequirements = () => {
   try {
+    if (
+      localStorage.getItem("walkwise-requirements-version") !==
+      requirementDefaultsVersion
+    )
+      return defaultRequirements;
     const parsed = requirementSchema.safeParse(
       JSON.parse(localStorage.getItem("walkwise-requirements") || "null"),
     );
     return parsed.success ? parsed.data : defaultRequirements;
   } catch {
     return defaultRequirements;
+  }
+};
+const initialAvoidBusyRoads = () => {
+  try {
+    return localStorage.getItem("walkwise-avoid-busy-roads") !== "false";
+  } catch {
+    return true;
   }
 };
 const readSavedHome = (): SavedPlace | undefined => {
@@ -77,6 +90,7 @@ export default function App() {
   const [end, setEnd] = useState<Place>(places[0]);
   const [requirements, setRequirements] =
     useState<Requirements>(initialRequirements);
+  const [avoidBusyRoads, setAvoidBusyRoads] = useState(initialAvoidBusyRoads);
   const [routes, setRoutes] = useState<Route[]>([]);
   const [routeError, setRouteError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -91,6 +105,17 @@ export default function App() {
   const selected = routes[0];
   const mapRoutes = useMemo(() => (selected ? [selected] : []), [selected]);
   const home = saved.find((place) => place.isHome);
+  useEffect(() => {
+    try {
+      if (
+        localStorage.getItem("walkwise-requirements-version") !==
+        requirementDefaultsVersion
+      )
+        setRequirements(defaultRequirements);
+    } catch {
+      /* Browser storage may be unavailable. */
+    }
+  }, []);
   useEffect(() => {
     if (home && !trip && !explicitStart.current) {
       setStart({ ...home, name: "Home" });
@@ -190,10 +215,21 @@ export default function App() {
         "walkwise-requirements",
         JSON.stringify(requirements),
       );
+      localStorage.setItem(
+        "walkwise-requirements-version",
+        requirementDefaultsVersion,
+      );
     } catch {
       /* Browser storage may be unavailable. */
     }
   }, [requirements]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("walkwise-avoid-busy-roads", String(avoidBusyRoads));
+    } catch {
+      /* Browser storage may be unavailable. */
+    }
+  }, [avoidBusyRoads]);
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(""), 7000);
@@ -238,16 +274,23 @@ export default function App() {
     };
     const run = async () => {
       try {
-        const response = await fetch("/api/routes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            start: start.coordinate,
-            end: end.coordinate,
-            requirements,
-          }),
-          signal: controller.signal,
-        });
+        const requestRoute = () =>
+          fetch("/api/routes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              start: start.coordinate,
+              end: end.coordinate,
+              requirements,
+              avoidBusyRoads,
+            }),
+            signal: controller.signal,
+          });
+        let response = await requestRoute();
+        if (response.status >= 500) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          response = await requestRoute();
+        }
         if (!response.headers.get("content-type")?.includes("application/json"))
           throw new Error("API_OFFLINE");
         const data = await response.json();
@@ -281,7 +324,7 @@ export default function App() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [start, end, requirements, hasDestination, hasStart]);
+  }, [start, end, requirements, avoidBusyRoads, hasDestination, hasStart]);
   async function action(fn: () => Promise<void>) {
     setBusy(true);
     try {
@@ -333,17 +376,6 @@ export default function App() {
     setModal(null);
     setNotice("Saved Home removed from this device.");
   }
-  async function startWalk() {
-    if (!selected) return;
-    setTrip({
-      started: Date.now(),
-      route: selected,
-      destination: end,
-    });
-    setNotice(
-      "Sample walk started. Progress is a time estimate; this is not live navigation.",
-    );
-  }
   async function endWalk(arrived: boolean) {
     setTrip(null);
     setNotice(arrived ? "Arrival confirmed." : "Walk ended.");
@@ -392,10 +424,10 @@ export default function App() {
               hasStart={hasStart}
               routes={routes}
               requirements={requirements}
+              avoidBusyRoads={avoidBusyRoads}
               loading={loading}
               error={routeError}
               home={home}
-              busy={busy}
               walking={!!trip}
               tripContent={
                 <>
@@ -446,7 +478,7 @@ export default function App() {
               onLocate={() => action(currentStart)}
               onHome={openHome}
               onRequirements={setRequirements}
-              onWalk={() => action(startWalk)}
+              onAvoidBusyRoads={setAvoidBusyRoads}
             />
           )}
           {tab === "docs" && (
@@ -466,16 +498,23 @@ export default function App() {
               </div>
               <div className="algorithm-docs">
                 <h2>Routing algorithm</h2>
-                <strong>Bidirectional A* with GDOT traffic exposure</strong>
+                <strong>
+                  Bidirectional A* with traffic and road-class exposure
+                </strong>
                 <ol>
                   <li>Valhalla generates pedestrian route candidates.</li>
                   <li>
-                    Walkwise scores sidewalk, crossing, speed, and 2025 GDOT
-                    traffic exposure, then checks every selected requirement.
+                    Walkwise scores sidewalk, crossing, speed, 2025 GDOT
+                    traffic, and OpenStreetMap road class, then checks every
+                    selected requirement.
                   </li>
                   <li>
-                    Failed locations are avoided and routing retries up to 3
-                    times.
+                    Failed locations and their short approaches are avoided in
+                    one parallel reroute pass.
+                  </li>
+                  <li>
+                    When Avoid busier roads is checked, traveled stretches of
+                    yellow main roads are excluded in a second candidate search.
                   </li>
                   <li>
                     The lowest-risk passing route wins; walking time breaks a
@@ -501,32 +540,47 @@ export default function App() {
                   </div>
                   <div>
                     <code>T</code>
-                    <span>Annual daily traffic exposure</span>
-                    <b>weight 10</b>
+                    <span>Traffic and busier-road exposure</span>
+                    <b>weight 22 when enabled</b>
                   </div>
                 </div>
                 <code className="algorithm-formula">
-                  R = 100 &times; (9M + 7C + 6V + 10T) / 40
+                  R = 100 &times; (9M + 7C + 6V + wT) / (22 + w)
                 </code>
                 <p className="traffic-method">
-                  T = &#8730;(AADT / 40,000), capped at 1. Nearby GDOT stations
-                  of a similar road class are interpolated. Missing stations use
-                  the road class estimate.
+                  T is the larger of &#8730;(AADT / 40,000) and the
+                  OpenStreetMap road-class estimate, capped at 1. This keeps
+                  yellow main roads costly even when a nearby GDOT count is low
+                  or missing. The traffic weight w is 22 when Avoid busier roads
+                  is checked and 4 when it is off.
                 </p>
                 <div className="requirement-variables">
                   <p>
+                    <code>avoidBusyRoads</code>
+                    Generates alternatives around traveled yellow main-road
+                    stretches, then prioritizes lower GDOT traffic exposure and
+                    less exposure to major road classes.
+                  </p>
+                  <p>
                     <code>requirements.speed</code>
-                    Every mapped road is 35 mph or less.
+                    Every mapped road is 35 mph or less. Higher speeds are
+                    labeled with the road name and mph.
                   </p>
                   <p>
                     <code>requirements.crosswalks</code>
                     Every required road crossing has a mapped crosswalk.
+                    Valhalla route edges and nearby OpenStreetMap crossing nodes
+                    are combined.
                   </p>
                   <p>
                     <code>requirements.sidewalks</code>
-                    Road walking uses mapped sidewalks; walking-only paths
-                    qualify. Missing sidewalk data on the destination school's
-                    final block is ignored.
+                    Sidewalks are checked by default. Walking-only paths
+                    qualify. Missing stretches are highlighted on the map.
+                  </p>
+                  <p>
+                    Speed, crosswalk, and sidewalk warnings within 180 meters of
+                    the destination school are ignored as part of the school's
+                    block.
                   </p>
                 </div>
               </div>
@@ -623,23 +677,14 @@ export default function App() {
                 </a>
                 <a
                   className="api-row"
-                  href="https://dpwgis.atlantaga.gov/hostingserver/rest/services/Hosted/SIGNs_Inventory_2018/FeatureServer/0"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Atlanta Signs Inventory</strong>
-                  <span>Active R1-1 stop signs near route crossings</span>
-                  <code>dpwgis.atlantaga.gov/.../SIGNs_Inventory_2018</code>
-                </a>
-                <a
-                  className="api-row"
                   href="https://wiki.openstreetmap.org/wiki/Overpass_API"
                   target="_blank"
                   rel="noreferrer"
                 >
                   <strong>Overpass API</strong>
                   <span>
-                    Separately mapped sidewalk and pedestrian geometry
+                    Separately mapped sidewalks, pedestrian geometry, and
+                    crosswalk nodes
                   </span>
                   <code>overpass-api.de/api/interpreter</code>
                 </a>
@@ -691,8 +736,8 @@ export default function App() {
                 mapped OpenStreetMap sidewalk geometry and Valhalla street tags.
                 Traffic exposure uses GDOT's 2025 annual average daily traffic
                 counts. Speed-limit and crossing checks depend on available map
-                attributes. Crossing labels match route crossings to Atlanta's
-                signalized-intersection and active R1-1 stop-sign records.
+                attributes. Crossing symbols match route crossings to Atlanta's
+                mapped signalized-intersection records.
               </p>
             </section>
           )}

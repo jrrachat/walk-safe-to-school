@@ -18,6 +18,7 @@ import {
   type Requirements,
   type Route,
   type RouteCrossing,
+  type RouteViolation,
   type Weights,
 } from "../shared/routing";
 
@@ -42,9 +43,6 @@ const atlantaSidewalkDataUrl =
 const trafficSignalsDataUrl =
   process.env.TRAFFIC_SIGNALS_DATA_URL ||
   "https://dpwgis.atlantaga.gov/hostingserver/rest/services/Signalized_Intersections/FeatureServer/0/query";
-const stopSignsDataUrl =
-  process.env.STOP_SIGNS_DATA_URL ||
-  "https://dpwgis.atlantaga.gov/hostingserver/rest/services/Hosted/SIGNs_Inventory_2018/FeatureServer/0/query";
 const gdotTrafficDataPath =
   process.env.GDOT_TRAFFIC_DATA_PATH ||
   new URL("./data/gdot-traffic-2025.json", import.meta.url);
@@ -100,8 +98,13 @@ type AttributeAudit = {
   checks: RequirementChecks;
   crossings: RouteCrossing[];
   violations: Partial<Record<RequirementKey, Coordinate[]>>;
+  violationDetails: Partial<Record<RequirementKey, RouteViolation[]>>;
+  alerts: RouteViolation[];
 };
-type RouteAnalysis = AttributeAudit & { traffic: number };
+type RouteAnalysis = AttributeAudit & {
+  traffic: number;
+  busyRoadLocations: Coordinate[];
+};
 const routeFeatureCache = new Map<
   string,
   { expires: number; analyses: (RouteAnalysis | undefined)[] }
@@ -344,6 +347,7 @@ type RouteAttributeEdge = {
   begin_shape_index?: number | null;
   end_shape_index?: number | null;
   speed_limit?: number | "unlimited" | null;
+  names?: string[] | null;
   use?: string | null;
   surface?: string | null;
   sidewalk?: "left" | "right" | "both" | "none" | null;
@@ -351,8 +355,6 @@ type RouteAttributeEdge = {
   traffic_signal?: boolean | null;
   traffic_signal_forward?: boolean | null;
   traffic_signal_backward?: boolean | null;
-  stop_sign_forward?: boolean | null;
-  stop_sign_backward?: boolean | null;
   separate_sidewalk_coverage?: number;
   separate_sidewalk_gaps?: Coordinate[];
 };
@@ -366,6 +368,7 @@ const traceAttributesSchema = z.object({
       begin_shape_index: z.number().int().nonnegative().nullish(),
       end_shape_index: z.number().int().nonnegative().nullish(),
       speed_limit: z.union([z.number(), z.literal("unlimited")]).nullish(),
+      names: z.array(z.string()).nullish(),
       use: z.string().nullish(),
       surface: z.string().nullish(),
       sidewalk: z.enum(["left", "right", "both", "none"]).nullish(),
@@ -373,8 +376,6 @@ const traceAttributesSchema = z.object({
       traffic_signal: z.boolean().nullish(),
       traffic_signal_forward: z.boolean().nullish(),
       traffic_signal_backward: z.boolean().nullish(),
-      stop_sign_forward: z.boolean().nullish(),
-      stop_sign_backward: z.boolean().nullish(),
     }),
   ),
 });
@@ -576,6 +577,103 @@ function edgeCoordinate(
   return coordinates[Math.round((begin + end) / 2)];
 }
 
+function edgeGeometry(
+  edge: RouteAttributeEdge,
+  edgeIndex: number,
+  edges: RouteAttributeEdge[],
+  coordinates: Coordinate[],
+) {
+  const begin = Math.min(coordinates.length - 1, edge.begin_shape_index ?? 0);
+  const nextBegin = edges[edgeIndex + 1]?.begin_shape_index;
+  const end = Math.min(
+    coordinates.length - 1,
+    Math.max(begin + 1, edge.end_shape_index ?? nextBegin ?? begin + 1),
+  );
+  const geometry = coordinates.slice(begin, end + 1);
+  return geometry.length > 1
+    ? geometry
+    : [coordinates[begin], coordinates[end]].filter(Boolean);
+}
+
+function edgeRoadName(edge: RouteAttributeEdge) {
+  return edge.names?.find((name) => name.trim()) || "Unnamed road";
+}
+
+function closestSegmentToGap(geometry: Coordinate[], gap: Coordinate) {
+  if (geometry.length < 2) return geometry;
+  let best = [geometry[0], geometry[1]] as Coordinate[];
+  let bestDistance = Infinity;
+  for (let index = 0; index < geometry.length - 1; index++) {
+    const midpoint: Coordinate = [
+      (geometry[index][0] + geometry[index + 1][0]) / 2,
+      (geometry[index][1] + geometry[index + 1][1]) / 2,
+    ];
+    const meters = distance(midpoint, gap);
+    if (meters < bestDistance) {
+      bestDistance = meters;
+      best = [geometry[index], geometry[index + 1]];
+    }
+  }
+  return best;
+}
+
+function sidewalkViolationDetails(
+  edges: RouteAttributeEdge[],
+  coordinates: Coordinate[],
+) {
+  return edges.flatMap((edge, index): RouteViolation[] => {
+    if (!roadLikeUse.test(edge.use || "") || sidewalkCoverage(edge) >= 0.95)
+      return [];
+    const geometry = edgeGeometry(edge, index, edges, coordinates);
+    const gaps = edge.separate_sidewalk_gaps?.length
+      ? edge.separate_sidewalk_gaps
+      : [edgeCoordinate(edge, index, edges, coordinates)].filter(
+          (coordinate): coordinate is Coordinate => Boolean(coordinate),
+        );
+    const roadName = edgeRoadName(edge);
+    return gaps.map((gap) => ({
+      coordinate: gap,
+      requirement: "sidewalks" as const,
+      label:
+        roadName === "Unnamed road"
+          ? "No sidewalk"
+          : "No sidewalk — " + roadName,
+      roadName,
+      geometry: closestSegmentToGap(geometry, gap),
+    }));
+  });
+}
+
+function speedViolationDetails(
+  edges: RouteAttributeEdge[],
+  coordinates: Coordinate[],
+  includeUnknown: boolean,
+) {
+  return edges.flatMap((edge, index): RouteViolation[] => {
+    if (!roadLikeUse.test(edge.use || "")) return [];
+    const speed = edge.speed_limit;
+    if (typeof speed === "number" && speed <= 56.327) return [];
+    if (typeof speed !== "number" && !includeUnknown) return [];
+    const roadName = edgeRoadName(edge);
+    const speedLimitMph =
+      typeof speed === "number"
+        ? Math.round((speed / 1.609344) * 10) / 10
+        : undefined;
+    return [
+      {
+        coordinate: edgeCoordinate(edge, index, edges, coordinates),
+        requirement: "speed" as const,
+        label: speedLimitMph
+          ? roadName + " — " + speedLimitMph + " mph"
+          : "Speed limit unavailable — " + roadName,
+        roadName,
+        speedLimitMph,
+        geometry: edgeGeometry(edge, index, edges, coordinates),
+      },
+    ];
+  });
+}
+
 const roadClassRanks: Record<string, number> = {
   motorway: 1,
   trunk: 2,
@@ -634,15 +732,60 @@ export function trafficExposure(
       )
       .sort((a, b) => a.meters - b.meters)
       .slice(0, 3);
-    const aadt = matches.length
+    const measuredAadt = matches.length
       ? matches.reduce(
           (sum, match) => sum + match.station.aadt / Math.max(75, match.meters),
           0,
         ) /
         matches.reduce((sum, match) => sum + 1 / Math.max(75, match.meters), 0)
-      : fallbackAadtByClass[rank];
-    return trafficRiskFromAadt(aadt);
+      : 0;
+    const measuredRisk = trafficRiskFromAadt(measuredAadt);
+    const roadClassRisk = trafficRiskFromAadt(fallbackAadtByClass[rank]);
+    return Math.max(measuredRisk, roadClassRisk);
   });
+}
+
+function coordinateAtFraction(geometry: Coordinate[], fraction: number) {
+  if (geometry.length === 1) return geometry[0];
+  const position = fraction * (geometry.length - 1);
+  const before = Math.floor(position);
+  const after = Math.min(geometry.length - 1, Math.ceil(position));
+  const amount = position - before;
+  return [
+    geometry[before][0] + (geometry[after][0] - geometry[before][0]) * amount,
+    geometry[before][1] + (geometry[after][1] - geometry[before][1]) * amount,
+  ] as Coordinate;
+}
+
+export function busyRoadAvoidLocations(
+  edges: RouteAttributeEdge[],
+  coordinates: Coordinate[],
+  start: Coordinate,
+  destination: Coordinate,
+) {
+  const locations: Coordinate[] = [];
+  for (const [index, edge] of edges.entries()) {
+    const rank = roadClassRanks[edge.road_class || ""] || 6;
+    const lengthMeters = (edge.length || 0) * 1000;
+    if (!roadLikeUse.test(edge.use || "") || rank > 4 || lengthMeters < 60)
+      continue;
+    const geometry = edgeGeometry(edge, index, edges, coordinates);
+    const sampleCount = Math.min(3, Math.max(1, Math.ceil(lengthMeters / 180)));
+    for (let sample = 1; sample <= sampleCount; sample++) {
+      const coordinate = coordinateAtFraction(
+        geometry,
+        sample / (sampleCount + 1),
+      );
+      if (
+        distance(coordinate, start) <= 110 ||
+        distance(coordinate, destination) <= destinationSchoolBlockRadiusMeters
+      )
+        continue;
+      if (locations.every((existing) => distance(existing, coordinate) > 65))
+        locations.push(coordinate);
+    }
+  }
+  return spacedCoordinates(locations, 10);
 }
 
 function edgeHasTrafficLights(edge: RouteAttributeEdge | undefined) {
@@ -653,9 +796,7 @@ function edgeHasTrafficLights(edge: RouteAttributeEdge | undefined) {
   );
 }
 
-function edgeHasStopSign(edge: RouteAttributeEdge | undefined) {
-  return Boolean(edge?.stop_sign_forward || edge?.stop_sign_backward);
-}
+const destinationSchoolBlockRadiusMeters = 180;
 
 export function applySchoolBlockSidewalkExemption(
   edges: RouteAttributeEdge[],
@@ -665,7 +806,7 @@ export function applySchoolBlockSidewalkExemption(
   const routeEnd = coordinates.at(-1);
   if (!destination || !routeEnd || distance(routeEnd, destination) > 80)
     return edges;
-  const schoolBlockRadiusMeters = 180;
+  const schoolBlockRadiusMeters = destinationSchoolBlockRadiusMeters;
   let lastRoadIndex = -1;
   for (let index = edges.length - 1; index >= 0; index--) {
     if (roadLikeUse.test(edges[index].use || "")) {
@@ -674,20 +815,8 @@ export function applySchoolBlockSidewalkExemption(
     }
   }
   if (lastRoadIndex < 0) return edges;
-  let lastCrossingIndex = -1;
-  for (let index = lastRoadIndex - 1; index >= 0; index--) {
-    if (edges[index].use === "pedestrian_crossing") {
-      lastCrossingIndex = index;
-      break;
-    }
-  }
   return edges.map((edge, index) => {
-    if (
-      index <= lastCrossingIndex ||
-      index > lastRoadIndex ||
-      !roadLikeUse.test(edge.use || "")
-    )
-      return edge;
+    if (index > lastRoadIndex || !roadLikeUse.test(edge.use || "")) return edge;
     const gaps = edge.separate_sidewalk_gaps;
     if (gaps?.length) {
       const remaining = gaps.filter(
@@ -728,6 +857,35 @@ export function applySchoolBlockSidewalkExemption(
   });
 }
 
+function isOnDestinationSchoolBlock(
+  coordinate: Coordinate,
+  routeCoordinates: Coordinate[],
+  destination?: Coordinate,
+) {
+  const routeEnd = routeCoordinates.at(-1);
+  return Boolean(
+    destination &&
+    routeEnd &&
+    distance(routeEnd, destination) <= 80 &&
+    distance(coordinate, destination) <= destinationSchoolBlockRadiusMeters,
+  );
+}
+
+function outsideDestinationSchoolBlock<T extends { coordinate: Coordinate }>(
+  details: T[],
+  routeCoordinates: Coordinate[],
+  destination?: Coordinate,
+) {
+  return details.filter(
+    (detail) =>
+      !isOnDestinationSchoolBlock(
+        detail.coordinate,
+        routeCoordinates,
+        destination,
+      ),
+  );
+}
+
 export function auditRouteAttributes(
   edges: RouteAttributeEdge[],
   coordinates: Coordinate[],
@@ -763,9 +921,6 @@ export function auditRouteAttributes(
           signalized: edges
             .slice(Math.max(0, edgeIndex - 1), edgeIndex + 2)
             .some(edgeHasTrafficLights),
-          stopSign: edges
-            .slice(Math.max(0, edgeIndex - 1), edgeIndex + 2)
-            .some(edgeHasStopSign),
           marked: true,
         });
     }
@@ -805,7 +960,6 @@ export function auditRouteAttributes(
         crossings.push({
           coordinate,
           signalized: crossingEdges.some(edgeHasTrafficLights),
-          stopSign: crossingEdges.some(edgeHasStopSign),
           marked: false,
         });
       }
@@ -825,26 +979,47 @@ export function auditRouteAttributes(
     (sum, edge) => sum + (edge.length || 0) * (1 - sidewalkCoverage(edge)),
     0,
   );
-  const sidewalkPasses =
-    sidewalkEdges.length > 0 &&
-    sidewalkLength > 0 &&
-    uncoveredSidewalkLength <= Math.min(0.02, sidewalkLength * 0.05);
-  const speedPasses = roadEdges.every(
-    (edge) =>
-      typeof edge.speed_limit === "number" && edge.speed_limit <= 56.327,
+  const speedDetails = outsideDestinationSchoolBlock(
+    speedViolationDetails(edges, coordinates, true),
+    coordinates,
+    destination,
   );
-  const crossingNeeded =
-    crossingEdges.length > 0 || unmarkedCrossingCoordinates.length > 0;
-  const crosswalksPass = unmarkedCrossingCoordinates.length === 0;
-  const violatingCoordinates = (
-    predicate: (edge: RouteAttributeEdge) => boolean,
-  ) =>
-    edges.flatMap((edge, index) => {
-      const coordinate = predicate(edge)
-        ? edgeCoordinate(edge, index, edges, coordinates)
-        : undefined;
-      return coordinate ? [coordinate] : [];
-    });
+  const speedAlertDetails = outsideDestinationSchoolBlock(
+    speedViolationDetails(edges, coordinates, false),
+    coordinates,
+    destination,
+  );
+  const sidewalkDetails = outsideDestinationSchoolBlock(
+    sidewalkViolationDetails(sidewalkAuditEdges, coordinates),
+    coordinates,
+    destination,
+  );
+  const missingCrosswalkCoordinates = crossings
+    .filter(
+      (crossing) =>
+        crossing.marked !== true &&
+        !isOnDestinationSchoolBlock(
+          crossing.coordinate,
+          coordinates,
+          destination,
+        ),
+    )
+    .map((crossing) => crossing.coordinate);
+  const sidewalkPasses =
+    (sidewalkEdges.length > 0 &&
+      sidewalkLength > 0 &&
+      uncoveredSidewalkLength <= Math.min(0.02, sidewalkLength * 0.05)) ||
+    sidewalkDetails.length === 0;
+  const speedPasses = speedDetails.length === 0;
+  const crossingNeeded = crossings.length > 0;
+  const crosswalksPass = missingCrosswalkCoordinates.length === 0;
+  const crosswalkDetails: RouteViolation[] = missingCrosswalkCoordinates.map(
+    (coordinate) => ({
+      coordinate,
+      requirement: "crosswalks",
+      label: requirementFailureLabels.crosswalks,
+    }),
+  );
   return {
     features: osmAttributeFeatures(sidewalkAuditEdges),
     checks: {
@@ -860,24 +1035,16 @@ export function auditRouteAttributes(
     },
     crossings,
     violations: {
-      speed: violatingCoordinates(
-        (edge) =>
-          roadLikeUse.test(edge.use || "") &&
-          (typeof edge.speed_limit !== "number" || edge.speed_limit > 56.327),
-      ),
-      sidewalks: sidewalkAuditEdges.flatMap((edge, index) => {
-        if (!roadLikeUse.test(edge.use || "") || sidewalkCoverage(edge) >= 0.95)
-          return [];
-        return edge.separate_sidewalk_gaps?.length
-          ? edge.separate_sidewalk_gaps
-          : [
-              edgeCoordinate(edge, index, sidewalkAuditEdges, coordinates),
-            ].filter((coordinate): coordinate is Coordinate =>
-              Boolean(coordinate),
-            );
-      }),
-      crosswalks: unmarkedCrossingCoordinates,
+      speed: speedDetails.map((detail) => detail.coordinate),
+      sidewalks: sidewalkDetails.map((detail) => detail.coordinate),
+      crosswalks: missingCrosswalkCoordinates,
     },
+    violationDetails: {
+      speed: speedDetails,
+      sidewalks: sidewalkDetails,
+      crosswalks: crosswalkDetails,
+    },
+    alerts: [...speedAlertDetails, ...sidewalkDetails],
   };
 }
 
@@ -908,6 +1075,42 @@ export function rerouteAvoidLocations(
   let targeted = failed.flatMap((key) =>
     spacedCoordinates(violations[key] || [], 4),
   );
+  if (failed.includes("crosswalks")) {
+    const crossingAvoidance = spacedCoordinates(
+      violations.crosswalks || [],
+      3,
+    ).flatMap((crossing) => {
+      let nearestIndex = 0;
+      let nearestDistance = Infinity;
+      for (const [index, coordinate] of routeCoordinates.entries()) {
+        const meters = distance(crossing, coordinate);
+        if (meters < nearestDistance) {
+          nearestDistance = meters;
+          nearestIndex = index;
+        }
+      }
+      const nearby: Coordinate[] = [crossing];
+      for (const direction of [-1, 1]) {
+        let walked = 0;
+        for (
+          let index = nearestIndex;
+          index + direction >= 0 && index + direction < routeCoordinates.length;
+          index += direction
+        ) {
+          walked += distance(
+            routeCoordinates[index],
+            routeCoordinates[index + direction],
+          );
+          if (walked >= 45) {
+            nearby.push(routeCoordinates[index + direction]);
+            break;
+          }
+        }
+      }
+      return nearby;
+    });
+    targeted = [...targeted, ...crossingAvoidance];
+  }
   if (!targeted.length && failed.length) {
     const interior = routeCoordinates.filter(
       (coordinate) =>
@@ -950,6 +1153,7 @@ async function fetchRouteAttributesForCoordinates(coordinates: Coordinate[]) {
           "edge.begin_shape_index",
           "edge.end_shape_index",
           "edge.speed_limit",
+          "edge.names",
           "edge.sidewalk",
           "edge.road_class",
           "edge.use",
@@ -957,8 +1161,6 @@ async function fetchRouteAttributesForCoordinates(coordinates: Coordinate[]) {
           "edge.traffic_signal",
           "edge.traffic_signal_forward",
           "edge.traffic_signal_backward",
-          "edge.stop_sign_forward",
-          "edge.stop_sign_backward",
           "shape",
         ],
       },
@@ -984,6 +1186,10 @@ const controlPointsSchema = z.object({
   ),
 });
 const routeDetailsCache = new Map<
+  string,
+  { expires: number; crossings: RouteCrossing[] }
+>();
+const routeCrossingEvidenceCache = new Map<
   string,
   { expires: number; crossings: RouteCrossing[] }
 >();
@@ -1029,25 +1235,17 @@ async function fetchControlPoints(
 export function addCrossingControls(
   crossings: RouteCrossing[],
   trafficSignals: Coordinate[],
-  stopSigns: Coordinate[],
-  radiusMeters = 45,
+  radiusMeters = 25,
 ) {
-  return crossings.map((crossing) => {
-    const signalized =
+  return crossings.map((crossing) => ({
+    ...crossing,
+    signalized:
       crossing.signalized ||
       trafficSignals.some(
         (coordinate) =>
           distance(crossing.coordinate, coordinate) <= radiusMeters,
-      );
-    const stopSign =
-      !signalized &&
-      (crossing.stopSign ||
-        stopSigns.some(
-          (coordinate) =>
-            distance(crossing.coordinate, coordinate) <= radiusMeters,
-        ));
-    return { ...crossing, signalized, stopSign };
-  });
+      ),
+  }));
 }
 
 function routeDetailsCacheKey(coordinates: Coordinate[]) {
@@ -1062,27 +1260,32 @@ export async function liveRouteDetails(coordinates: Coordinate[]) {
   if (cached && cached.expires > Date.now())
     return { crossings: cached.crossings };
 
-  const traced = await fetchRouteAttributesForCoordinates(coordinates);
-  const analysis = auditRouteAttributes(traced.edges, traced.coordinates);
-  const [signalsResult, stopsResult] = await Promise.allSettled([
-    fetchControlPoints(
-      trafficSignalsDataUrl,
-      "1=1",
-      "OBJECTID,STREET1,STREET2",
+  const evidence = routeCrossingEvidenceCache.get(cacheKey);
+  let routeCoordinates = coordinates;
+  let baseCrossings =
+    evidence?.expires && evidence.expires > Date.now()
+      ? evidence.crossings
+      : undefined;
+  if (!baseCrossings) {
+    const traced = await fetchRouteAttributesForCoordinates(coordinates);
+    routeCoordinates = traced.coordinates;
+    const analysis = auditRouteAttributes(traced.edges, traced.coordinates);
+    const mappedCrossings = await fetchMappedCrossings([traced]).catch(
+      () => [] as MappedCrossing[],
+    );
+    baseCrossings = mergeMappedCrossings(
+      analysis.crossings,
+      mappedCrossings,
       traced.coordinates,
-    ),
-    fetchControlPoints(
-      stopSignsDataUrl,
-      "geodata_sign_signcode = 'R1-1' AND geodata_sign_status = 'Active'",
-      "objectid,geodata_sign_signcode,geodata_sign_status",
-      traced.coordinates,
-    ),
-  ]);
-  const crossings = addCrossingControls(
-    analysis.crossings,
-    signalsResult.status === "fulfilled" ? signalsResult.value : [],
-    stopsResult.status === "fulfilled" ? stopsResult.value : [],
-  );
+    );
+  }
+  const trafficSignals = await fetchControlPoints(
+    trafficSignalsDataUrl,
+    "1=1",
+    "OBJECTID,STREET1,STREET2",
+    routeCoordinates,
+  ).catch(() => [] as Coordinate[]);
+  const crossings = addCrossingControls(baseCrossings, trafficSignals);
   if (routeDetailsCache.size >= 80)
     routeDetailsCache.delete(routeDetailsCache.keys().next().value!);
   routeDetailsCache.set(cacheKey, {
@@ -1090,6 +1293,212 @@ export async function liveRouteDetails(coordinates: Coordinate[]) {
     crossings,
   });
   return { crossings };
+}
+
+export type MappedCrossing = {
+  coordinate: Coordinate;
+  marked?: boolean;
+  signalized: boolean;
+};
+const mappedCrossingsSchema = z.object({
+  elements: z.array(
+    z.object({
+      type: z.literal("node"),
+      lat: z.number(),
+      lon: z.number(),
+      tags: z.record(z.string(), z.string()).optional(),
+    }),
+  ),
+});
+
+function routePointMatch(point: Coordinate, coordinates: Coordinate[]) {
+  if (coordinates.length < 2) {
+    const coordinate = coordinates[0];
+    return {
+      distance: coordinate ? distance(point, coordinate) : Infinity,
+      coordinate: coordinate || point,
+    };
+  }
+  const latitude = point[1];
+  const projected = projectedPoint(point, latitude);
+  let nearest = Infinity;
+  let matched = coordinates[0];
+  for (let index = 0; index < coordinates.length - 1; index++) {
+    const start = projectedPoint(coordinates[index], latitude);
+    const end = projectedPoint(coordinates[index + 1], latitude);
+    const dx = end[0] - start[0];
+    const dy = end[1] - start[1];
+    const lengthSquared = dx * dx + dy * dy;
+    const amount = lengthSquared
+      ? Math.max(
+          0,
+          Math.min(
+            1,
+            ((projected[0] - start[0]) * dx + (projected[1] - start[1]) * dy) /
+              lengthSquared,
+          ),
+        )
+      : 0;
+    const candidateDistance = Math.hypot(
+      projected[0] - (start[0] + amount * dx),
+      projected[1] - (start[1] + amount * dy),
+    );
+    if (candidateDistance < nearest) {
+      nearest = candidateDistance;
+      matched = [
+        coordinates[index][0] +
+          amount * (coordinates[index + 1][0] - coordinates[index][0]),
+        coordinates[index][1] +
+          amount * (coordinates[index + 1][1] - coordinates[index][1]),
+      ];
+    }
+  }
+  return { distance: nearest, coordinate: matched };
+}
+
+function routePointDistance(point: Coordinate, coordinates: Coordinate[]) {
+  return routePointMatch(point, coordinates).distance;
+}
+
+export function mergeMappedCrossings(
+  crossings: RouteCrossing[],
+  mappedCrossings: MappedCrossing[],
+  coordinates: Coordinate[],
+  routeRadiusMeters = 5,
+) {
+  const merged = crossings.map((crossing) => ({ ...crossing }));
+  for (const mapped of mappedCrossings) {
+    const existing = merged.find(
+      (crossing) => distance(crossing.coordinate, mapped.coordinate) <= 18,
+    );
+    if (existing) {
+      if (mapped.marked !== undefined) existing.marked = mapped.marked;
+      existing.signalized = existing.signalized || mapped.signalized;
+      continue;
+    }
+    if (mapped.marked !== true) continue;
+    const routeMatch = routePointMatch(mapped.coordinate, coordinates);
+    if (routeMatch.distance > routeRadiusMeters) continue;
+    merged.push({
+      coordinate: routeMatch.coordinate,
+      marked: true,
+      signalized: mapped.signalized,
+    });
+  }
+  return merged;
+}
+
+export function applyMappedCrossings(
+  analysis: AttributeAudit,
+  coordinates: Coordinate[],
+  mappedCrossings: MappedCrossing[],
+  destination?: Coordinate,
+): AttributeAudit {
+  const crossings = mergeMappedCrossings(
+    analysis.crossings,
+    mappedCrossings,
+    coordinates,
+  );
+  const unmarked = crossings.filter(
+    (crossing) =>
+      crossing.marked !== true &&
+      !isOnDestinationSchoolBlock(
+        crossing.coordinate,
+        coordinates,
+        destination,
+      ),
+  );
+  const kilometers = Math.max(
+    0.25,
+    coordinates
+      .slice(1)
+      .reduce(
+        (sum, coordinate, index) =>
+          sum + distance(coordinates[index], coordinate) / 1000,
+        0,
+      ),
+  );
+  const crosswalkDetails: RouteViolation[] = unmarked.map((crossing) => ({
+    coordinate: crossing.coordinate,
+    requirement: "crosswalks",
+    label: requirementFailureLabels.crosswalks,
+  }));
+  return {
+    ...analysis,
+    features: {
+      ...analysis.features,
+      crossings: clamp(crossings.length / Math.max(2, kilometers * 5)),
+    },
+    crossings,
+    checks: {
+      ...analysis.checks,
+      crosswalks: {
+        applicable: crossings.length > 0,
+        passes: unmarked.length === 0,
+      },
+    },
+    violations: {
+      ...analysis.violations,
+      crosswalks: unmarked.map((crossing) => crossing.coordinate),
+    },
+    violationDetails: {
+      ...analysis.violationDetails,
+      crosswalks: crosswalkDetails,
+    },
+  };
+}
+
+async function fetchMappedCrossings(routes: TracedRoute[]) {
+  const statements = routes.map((route) => {
+    const line = sampleCoordinates(route.coordinates, 55)
+      .map(([lon, lat]) => lat + "," + lon)
+      .join(",");
+    return 'node["highway"="crossing"](around:30,' + line + ");";
+  });
+  const query =
+    "[out:json][timeout:15];(" + statements.join("") + ");out body;";
+  const response = await fetch(sidewalkDataUrl, {
+    method: "POST",
+    signal: AbortSignal.timeout(4500),
+    headers: {
+      ...serviceHeaders(),
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ data: query }),
+  });
+  if (!response.ok) throw new Error("Mapped crosswalk data unavailable");
+  return mappedCrossingsSchema
+    .parse(await response.json())
+    .elements.map(({ lon, lat, tags }): MappedCrossing => {
+      const crossing = tags?.crossing?.toLowerCase();
+      const markings = tags?.["crossing:markings"]?.toLowerCase();
+      const crossingRef = tags?.crossing_ref?.toLowerCase();
+      const explicitlyUnmarked =
+        crossing === "unmarked" ||
+        crossing === "no" ||
+        markings === "no" ||
+        markings === "none";
+      const explicitlyMarked =
+        crossing === "marked" ||
+        crossing === "zebra" ||
+        crossing === "traffic_signals" ||
+        crossing === "pelican" ||
+        crossing === "toucan" ||
+        crossingRef === "zebra" ||
+        Boolean(markings && markings !== "no" && markings !== "none");
+      return {
+        coordinate: [lon, lat],
+        marked: explicitlyUnmarked
+          ? false
+          : explicitlyMarked
+            ? true
+            : undefined,
+        signalized:
+          crossing === "traffic_signals" ||
+          tags?.["crossing:signals"] === "yes",
+      };
+    });
 }
 
 const sidewalkWaysSchema = z.object({
@@ -1129,7 +1538,7 @@ async function fetchSeparateSidewalks(routes: TracedRoute[]) {
     "[out:json][timeout:20];(" + statements.join("") + ");out geom;";
   const response = await fetch(sidewalkDataUrl, {
     method: "POST",
-    signal: AbortSignal.timeout(25000),
+    signal: AbortSignal.timeout(5500),
     headers: {
       ...serviceHeaders(),
       Accept: "application/json",
@@ -1175,7 +1584,7 @@ async function fetchAtlantaSidewalks(routes: TracedRoute[]) {
   for (let offset = 0; offset < 6000; offset += 2000) {
     const response = await fetch(atlantaSidewalkDataUrl, {
       method: "POST",
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(2500),
       headers: {
         ...serviceHeaders(),
         "Content-Type": "application/x-www-form-urlencoded",
@@ -1219,10 +1628,12 @@ async function fetchAtlantaSidewalks(routes: TracedRoute[]) {
 async function analyzeTrips(
   trips: LiveTrip[],
   includeSidewalkInventory: boolean,
+  includeMappedCrosswalks: boolean,
   destination: Coordinate,
 ) {
   const key =
     (includeSidewalkInventory ? "sidewalk:" : "attributes:") +
+    (includeMappedCrosswalks ? "crosswalks:" : "") +
     destination.join(",") +
     ":" +
     trips.map((trip) => trip.legs.map((leg) => leg.shape).join("|")).join("::");
@@ -1235,18 +1646,24 @@ async function analyzeTrips(
     result.status === "fulfilled" ? [result.value] : [],
   );
   if (!tracedRoutes.length) throw new Error("Route attributes unavailable");
-  let separateSidewalks: SidewalkWay[] = [];
-  if (includeSidewalkInventory) {
+  const sidewalkPromise = (async () => {
+    if (!includeSidewalkInventory) return [] as SidewalkWay[];
+    const osmFallback = new Promise<void>((resolve) => setTimeout(resolve, 650))
+      .then(() => fetchSeparateSidewalks(tracedRoutes))
+      .catch(() => [] as SidewalkWay[]);
     try {
-      separateSidewalks = await fetchAtlantaSidewalks(tracedRoutes);
+      return await fetchAtlantaSidewalks(tracedRoutes);
     } catch {
-      try {
-        separateSidewalks = await fetchSeparateSidewalks(tracedRoutes);
-      } catch {
-        throw new Error("Sidewalk geometry unavailable");
-      }
+      return await osmFallback;
     }
-  }
+  })();
+  const crossingPromise = includeMappedCrosswalks
+    ? fetchMappedCrossings(tracedRoutes).catch(() => [] as MappedCrossing[])
+    : Promise.resolve([] as MappedCrossing[]);
+  const [separateSidewalks, mappedCrossings] = await Promise.all([
+    sidewalkPromise,
+    crossingPromise,
+  ]);
   let tracedIndex = 0;
   const analyses = tracedResults.map((result): RouteAnalysis | undefined => {
     if (result.status === "rejected") return undefined;
@@ -1256,9 +1673,25 @@ async function analyzeTrips(
       traced.coordinates,
       separateSidewalks,
     );
+    const audited = auditRouteAttributes(
+      edges,
+      traced.coordinates,
+      destination,
+    );
     return {
-      ...auditRouteAttributes(edges, traced.coordinates, destination),
+      ...applyMappedCrossings(
+        audited,
+        traced.coordinates,
+        mappedCrossings,
+        destination,
+      ),
       traffic: trafficExposure(edges, traced.coordinates),
+      busyRoadLocations: busyRoadAvoidLocations(
+        edges,
+        traced.coordinates,
+        traced.coordinates[0],
+        destination,
+      ),
     };
   });
   if (routeFeatureCache.size >= 40)
@@ -1269,17 +1702,15 @@ async function analyzeTrips(
   });
   return analyses;
 }
-function liveCandidate(
-  trip: LiveTrip,
-  index: number,
+export function scoreLiveRisk(
+  features: Weights,
+  traffic: number,
   weights: Weights,
-  analysis: RouteAnalysis,
+  avoidBusyRoads: boolean,
 ) {
-  const { features, traffic, checks, crossings, violations } = analysis;
-  const coordinates = tripCoordinates(trip);
-  const meters = trip.summary.length * 1000;
-  const trafficWeight = 10;
-  const totalWeight = 40;
+  const trafficWeight = avoidBusyRoads ? 22 : 4;
+  const totalWeight =
+    factors.reduce((sum, factor) => sum + weights[factor], 0) + trafficWeight;
   const weightedBreakdown = Object.fromEntries(
     factors.map((factor) => [
       factor,
@@ -1296,6 +1727,33 @@ function liveCandidate(
       0,
     ),
   );
+  return { breakdown, risk, trafficWeight, totalWeight };
+}
+
+function liveCandidate(
+  trip: LiveTrip,
+  index: number,
+  weights: Weights,
+  analysis: RouteAnalysis,
+  avoidBusyRoads: boolean,
+) {
+  const {
+    features,
+    traffic,
+    checks,
+    crossings,
+    violations,
+    alerts,
+    busyRoadLocations,
+  } = analysis;
+  const coordinates = tripCoordinates(trip);
+  const meters = trip.summary.length * 1000;
+  const { breakdown, risk } = scoreLiveRisk(
+    features,
+    traffic,
+    weights,
+    avoidBusyRoads,
+  );
   const edge: Edge = {
     id: "live-edge-" + index,
     from: "live-start",
@@ -1306,6 +1764,14 @@ function liveCandidate(
     geometry: coordinates,
     bidirectional: false,
   };
+  if (routeCrossingEvidenceCache.size >= 120)
+    routeCrossingEvidenceCache.delete(
+      routeCrossingEvidenceCache.keys().next().value!,
+    );
+  routeCrossingEvidenceCache.set(routeDetailsCacheKey(coordinates), {
+    expires: Date.now() + 30 * 60 * 1000,
+    crossings,
+  });
   const route: Route = {
     category: "Fastest",
     nodes: ["live-start", "live-end"],
@@ -1319,8 +1785,15 @@ function liveCandidate(
     duplicate: false,
     checks,
     crossings,
+    alerts,
   };
-  return { id: String(index), route, violations };
+  return {
+    id: String(index),
+    route,
+    violations,
+    violationDetails: analysis.violationDetails,
+    busyRoadLocations,
+  };
 }
 type LiveCandidate = ReturnType<typeof liveCandidate>;
 
@@ -1346,6 +1819,11 @@ function failedRoute(candidates: LiveCandidate[], requirements: Requirements) {
   const violations = requirementKeys.flatMap((requirement) => {
     if (!requirements[requirement] || best.route.checks?.[requirement].passes)
       return [];
+    const details = best.violationDetails[requirement] || [];
+    if (details.length) {
+      const step = Math.max(1, Math.ceil(details.length / 6));
+      return details.filter((_, index) => index % step === 0).slice(0, 6);
+    }
     const coordinates = spacedCoordinates(
       best.violations[requirement] || [],
       6,
@@ -1399,6 +1877,7 @@ export async function liveRoutes(
   start: Coordinate,
   end: Coordinate,
   requirements: Requirements,
+  avoidBusyRoads = true,
 ) {
   const preferenceStrength =
     requirementKeys.filter((key) => requirements[key]).length /
@@ -1409,7 +1888,7 @@ export async function liveRoutes(
   ) => {
     const response = await fetch(routingUrl, {
       method: "POST",
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(10000),
       headers: { "Content-Type": "application/json", "X-Client-Id": clientId },
       body: JSON.stringify({
         locations: [
@@ -1449,86 +1928,163 @@ export async function liveRoutes(
       ...(payload.alternates || []).map((item) => item.trip),
     ];
   };
-  const batchResults = await Promise.allSettled([
-    requestRoutes(true),
-    ...(preferenceStrength > 0.01 ? [requestRoutes(false)] : []),
-  ]);
+  const batchResults = await Promise.allSettled([requestRoutes(true)]);
   const batches = batchResults.flatMap((result) =>
     result.status === "fulfilled" ? [result.value] : [],
   );
   if (!batches.length) throw new Error("Live pedestrian routing unavailable");
   const trips = uniqueTrips(batches.flat());
-  const analyses = await analyzeTrips(trips, requirements.sidewalks, end);
+  const analyses = await analyzeTrips(
+    trips,
+    requirements.sidewalks,
+    requirements.crosswalks,
+    end,
+  );
   const candidates = trips.flatMap((trip, index) =>
     analyses[index]
-      ? [liveCandidate(trip, index, defaults, analyses[index])]
+      ? [liveCandidate(trip, index, defaults, analyses[index], avoidBusyRoads)]
       : [],
   );
   if (!candidates.length) throw new Error("Route attributes unavailable");
-  let selected = selectQualifyingRoute(candidates, requirements);
-  let avoidLocations: Coordinate[] = [];
 
-  for (let attempt = 0; !selected && attempt < 3; attempt++) {
+  if (avoidBusyRoads) {
+    const currentBest = [...candidates].sort(
+      (a, b) =>
+        a.route.risk - b.route.risk || a.route.minutes - b.route.minutes,
+    )[0];
+    if (currentBest.busyRoadLocations.length) {
+      const busyReroute = await Promise.allSettled([
+        requestRoutes(true, currentBest.busyRoadLocations),
+      ]);
+      const knownShapes = new Set(
+        trips.map((trip) => trip.legs.map((leg) => leg.shape).join("|")),
+      );
+      const quieterTrips = uniqueTrips(
+        busyReroute.flatMap((result) =>
+          result.status === "fulfilled" ? result.value : [],
+        ),
+      ).filter(
+        (trip) => !knownShapes.has(trip.legs.map((leg) => leg.shape).join("|")),
+      );
+      if (quieterTrips.length) {
+        try {
+          const quieterAnalyses = await analyzeTrips(
+            quieterTrips,
+            requirements.sidewalks,
+            requirements.crosswalks,
+            end,
+          );
+          candidates.push(
+            ...quieterTrips.flatMap((trip, index) =>
+              quieterAnalyses[index]
+                ? [
+                    liveCandidate(
+                      trip,
+                      candidates.length + index,
+                      defaults,
+                      quieterAnalyses[index],
+                      true,
+                    ),
+                  ]
+                : [],
+            ),
+          );
+        } catch {}
+      }
+    }
+  }
+
+  let selected = selectQualifyingRoute(candidates, requirements);
+
+  if (!selected) {
     const ranked = [...candidates].sort(
       (a, b) =>
         failedRequirementCount(a, requirements) -
           failedRequirementCount(b, requirements) ||
         a.route.risk - b.route.risk,
     );
-    let nextAvoidLocations = avoidLocations;
-    for (const candidate of ranked) {
-      const proposed = rerouteAvoidLocations(
-        requirements,
-        candidate.route.checks!,
-        candidate.violations,
-        candidate.route.coordinates,
-        start,
-        end,
-        avoidLocations,
+    const avoidanceSets = ranked
+      .slice(0, 3)
+      .map((candidate) =>
+        rerouteAvoidLocations(
+          requirements,
+          candidate.route.checks!,
+          candidate.violations,
+          candidate.route.coordinates,
+          start,
+          end,
+        ),
+      )
+      .filter((locations) => locations.length)
+      .filter(
+        (locations, index, all) =>
+          all.findIndex(
+            (candidate) =>
+              candidate
+                .map((coordinate) => coordinate.join(","))
+                .sort()
+                .join("|") ===
+              locations
+                .map((coordinate) => coordinate.join(","))
+                .sort()
+                .join("|"),
+          ) === index,
       );
-      if (proposed.length > avoidLocations.length) {
-        nextAvoidLocations = proposed;
-        break;
-      }
-    }
-    if (nextAvoidLocations.length === avoidLocations.length) break;
-    avoidLocations = nextAvoidLocations;
 
-    let rerouted: LiveTrip[];
-    try {
-      rerouted = await requestRoutes(true, avoidLocations);
-    } catch {
-      break;
-    }
+    const rerouteResults = await Promise.allSettled(
+      avoidanceSets.map((locations) => requestRoutes(true, locations)),
+    );
     const knownShapes = new Set(
       trips.map((trip) => trip.legs.map((leg) => leg.shape).join("|")),
     );
-    const unseen = uniqueTrips(rerouted).filter(
-      (trip) => !knownShapes.has(trip.legs.map((leg) => leg.shape).join("|")),
+    const knownMissingCrosswalks = candidates.flatMap(
+      (candidate) => candidate.violations.crosswalks || [],
     );
-    if (!unseen.length) continue;
-    trips.push(...unseen);
-    let newAnalyses: (RouteAnalysis | undefined)[];
-    try {
-      newAnalyses = await analyzeTrips(unseen, requirements.sidewalks, end);
-    } catch {
-      break;
-    }
-    candidates.push(
-      ...unseen.flatMap((trip, index) =>
-        newAnalyses[index]
-          ? [
-              liveCandidate(
-                trip,
-                candidates.length + index,
-                defaults,
-                newAnalyses[index],
-              ),
-            ]
-          : [],
+    const unseen = uniqueTrips(
+      rerouteResults.flatMap((result) =>
+        result.status === "fulfilled" ? result.value : [],
       ),
-    );
-    selected = selectQualifyingRoute(candidates, requirements);
+    )
+      .filter(
+        (trip) => !knownShapes.has(trip.legs.map((leg) => leg.shape).join("|")),
+      )
+      .filter((trip) => {
+        const coordinates = tripCoordinates(trip);
+        return knownMissingCrosswalks.every(
+          (crossing) => routePointDistance(crossing, coordinates) > 12,
+        );
+      });
+    if (unseen.length) {
+      try {
+        const retrySidewalkInventory =
+          requirements.sidewalks &&
+          candidates.every(
+            (candidate) => !candidate.route.checks?.sidewalks.passes,
+          );
+        const newAnalyses = await analyzeTrips(
+          unseen,
+          retrySidewalkInventory,
+          false,
+          end,
+        );
+        candidates.push(
+          ...unseen.flatMap((trip, index) =>
+            newAnalyses[index]
+              ? [
+                  liveCandidate(
+                    trip,
+                    candidates.length + index,
+                    defaults,
+                    newAnalyses[index],
+                    avoidBusyRoads,
+                  ),
+                ]
+              : [],
+          ),
+        );
+        selected = selectQualifyingRoute(candidates, requirements);
+      } catch {}
+    }
   }
 
   if (!selected)
@@ -1545,7 +2101,6 @@ export function liveProviders() {
     sidewalks: new URL(sidewalkDataUrl).hostname,
     atlantaSidewalks: new URL(atlantaSidewalkDataUrl).hostname,
     trafficSignals: new URL(trafficSignalsDataUrl).hostname,
-    stopSigns: new URL(stopSignsDataUrl).hostname,
     trafficCounts: trafficData.source + " " + trafficData.year,
   };
 }

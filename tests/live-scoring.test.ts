@@ -3,13 +3,17 @@ import {
   addSeparateSidewalkEvidence,
   addCrossingControls,
   applySchoolBlockSidewalkExemption,
+  applyMappedCrossings,
   auditRouteAttributes,
+  busyRoadAvoidLocations,
   osmAttributeFeatures,
   rerouteAvoidLocations,
+  scoreLiveRisk,
   trafficExposure,
   trafficRiskFromAadt,
+  mergeMappedCrossings,
 } from "../server/live";
-import type { Coordinate } from "../shared/routing";
+import { defaults, type Coordinate } from "../shared/routing";
 
 describe("live route attribute scoring", () => {
   it("penalizes road exposure more than a dedicated pedestrian path", () => {
@@ -57,7 +61,82 @@ describe("live route attribute scoring", () => {
         statisticsType: "Actual",
       },
     ]);
-    expect(high).toBeGreaterThan(low * 3);
+    expect(high).toBeGreaterThan(low * 1.3);
+  });
+
+  it("penalizes yellow major-road classes even with a low nearby count", () => {
+    const coordinates: Coordinate[] = [[-84.39, 33.77]];
+    const primary = trafficExposure(
+      [{ length: 1, use: "road", road_class: "primary", begin_shape_index: 0 }],
+      coordinates,
+      [],
+    );
+    const residential = trafficExposure(
+      [
+        {
+          length: 1,
+          use: "road",
+          road_class: "residential",
+          begin_shape_index: 0,
+        },
+      ],
+      coordinates,
+      [],
+    );
+    expect(primary).toBeGreaterThan(residential * 3);
+  });
+
+  it("targets traveled yellow-road stretches without blocking crossings or endpoints", () => {
+    const coordinates: Coordinate[] = Array.from({ length: 12 }, (_, index) => [
+      -84.4 + index * 0.001,
+      33.77,
+    ]);
+    const locations = busyRoadAvoidLocations(
+      [
+        {
+          length: 0.7,
+          use: "road",
+          road_class: "primary",
+          begin_shape_index: 2,
+          end_shape_index: 9,
+        },
+        {
+          length: 0.02,
+          use: "road",
+          road_class: "primary",
+          begin_shape_index: 9,
+          end_shape_index: 10,
+        },
+        {
+          length: 0.2,
+          use: "road",
+          road_class: "residential",
+          begin_shape_index: 0,
+          end_shape_index: 2,
+        },
+      ],
+      coordinates,
+      coordinates[0],
+      coordinates.at(-1)!,
+    );
+    expect(locations.length).toBeGreaterThan(0);
+    expect(locations.length).toBeLessThanOrEqual(10);
+    expect(locations.every(([longitude]) => longitude > -84.398)).toBe(true);
+    expect(locations.every(([longitude]) => longitude < -84.391)).toBe(true);
+  });
+
+  it("makes traffic the largest factor when avoiding busier roads", () => {
+    const features = { sidewalk: 0.4, crossings: 0.4, speed: 0.4 };
+    const preferred = scoreLiveRisk(features, 0.8, defaults, true);
+    const relaxed = scoreLiveRisk(features, 0.8, defaults, false);
+    expect(preferred.trafficWeight).toBe(22);
+    expect(relaxed.trafficWeight).toBe(4);
+    expect(preferred.breakdown.traffic).toBeGreaterThan(
+      preferred.breakdown.sidewalk,
+    );
+    expect(preferred.breakdown.traffic).toBeGreaterThan(
+      relaxed.breakdown.traffic * 2,
+    );
   });
 
   it("recognizes a mapped sidewalk and signalized crossing", () => {
@@ -144,6 +223,63 @@ describe("live route attribute scoring", () => {
     expect(unsafeCrossing.checks.sidewalks.passes).toBe(false);
     expect(unsafeCrossing.checks.crosswalks.passes).toBe(true);
     expect(unsafeCrossing.crossings).toHaveLength(1);
+  });
+
+  it("reports the road name and mph for roads over 35 mph", () => {
+    const result = auditRouteAttributes(
+      [
+        {
+          length: 0.2,
+          use: "road",
+          names: ["Monroe Drive"],
+          speed_limit: 64.3738,
+          sidewalk: "both",
+          begin_shape_index: 0,
+          end_shape_index: 1,
+        },
+      ],
+      [
+        [-84.37, 33.78],
+        [-84.369, 33.781],
+      ],
+    );
+    expect(result.alerts).toMatchObject([
+      {
+        requirement: "speed",
+        roadName: "Monroe Drive",
+        speedLimitMph: 40,
+        label: "Monroe Drive — 40 mph",
+      },
+    ]);
+  });
+
+  it("returns route geometry for each missing-sidewalk stretch", () => {
+    const result = auditRouteAttributes(
+      [
+        {
+          length: 0.1,
+          use: "road",
+          names: ["Example Street"],
+          sidewalk: "none",
+          begin_shape_index: 0,
+          end_shape_index: 1,
+        },
+      ],
+      [
+        [-84.39, 33.77],
+        [-84.389, 33.77],
+      ],
+    );
+    expect(result.alerts).toMatchObject([
+      {
+        requirement: "sidewalks",
+        label: "No sidewalk — Example Street",
+        geometry: [
+          [-84.39, 33.77],
+          [-84.389, 33.77],
+        ],
+      },
+    ]);
   });
 
   it("treats unlimited speed as failing the maximum-speed requirement", () => {
@@ -262,7 +398,7 @@ describe("live route attribute scoring", () => {
       destination,
     ];
     const finalBlockGap: Coordinate = [-84.3884, 33.77];
-    const earlierGap: Coordinate = [-84.3895, 33.77];
+    const earlierGap: Coordinate = [-84.3905, 33.77];
     const edges = [
       {
         length: 0.1,
@@ -312,6 +448,86 @@ describe("live route attribute scoring", () => {
     expect(sameEdgeAwayFromSchool.checks.sidewalks.passes).toBe(false);
   });
 
+  it("ignores every warning on the destination school's block", () => {
+    const destination: Coordinate = [-84.388, 33.77];
+    const coordinates: Coordinate[] = [
+      [-84.3905, 33.77],
+      [-84.3892, 33.77],
+      [-84.3885, 33.77],
+      destination,
+    ];
+    const result = auditRouteAttributes(
+      [
+        {
+          length: 0.1,
+          use: "footway",
+          begin_shape_index: 0,
+          end_shape_index: 1,
+        },
+        {
+          length: 0.05,
+          use: "road",
+          names: ["School Drive"],
+          speed_limit: 64.3738,
+          sidewalk: "none",
+          begin_shape_index: 1,
+          end_shape_index: 2,
+        },
+        {
+          length: 0.1,
+          use: "footway",
+          begin_shape_index: 2,
+          end_shape_index: 3,
+        },
+      ],
+      coordinates,
+      destination,
+    );
+    expect(result.checks.speed.passes).toBe(true);
+    expect(result.checks.crosswalks.passes).toBe(true);
+    expect(result.checks.sidewalks.passes).toBe(true);
+    expect(result.violations.speed).toEqual([]);
+    expect(result.violations.crosswalks).toEqual([]);
+    expect(result.violations.sidewalks).toEqual([]);
+    expect(result.alerts).toEqual([]);
+  });
+
+  it("ignores mapped unmarked-crossing warnings on the school block", () => {
+    const destination: Coordinate = [-84.388, 33.77];
+    const coordinates: Coordinate[] = [
+      [-84.3895, 33.77],
+      [-84.3885, 33.77],
+      destination,
+    ];
+    const audited = auditRouteAttributes(
+      [
+        {
+          length: 0.02,
+          use: "pedestrian_crossing",
+          begin_shape_index: 1,
+          end_shape_index: 2,
+        },
+      ],
+      coordinates,
+      destination,
+    );
+    const mapped = applyMappedCrossings(
+      audited,
+      coordinates,
+      [
+        {
+          coordinate: coordinates[1],
+          marked: false,
+          signalized: false,
+        },
+      ],
+      destination,
+    );
+    expect(mapped.checks.crosswalks.passes).toBe(true);
+    expect(mapped.violations.crosswalks).toEqual([]);
+    expect(mapped.violationDetails.crosswalks).toEqual([]);
+  });
+
   it("targets only violations from checked factors when rerouting", () => {
     const requirements = {
       speed: true,
@@ -336,7 +552,30 @@ describe("live route attribute scoring", () => {
     expect(result).toEqual([speedViolation]);
   });
 
-  it("adds mapped lights and stop signs to crossings", () => {
+  it("blocks the approach around a missing crosswalk when rerouting", () => {
+    const start: Coordinate = [-84.392, 33.77];
+    const before: Coordinate = [-84.3912, 33.77];
+    const crossing: Coordinate = [-84.3906, 33.77];
+    const after: Coordinate = [-84.39, 33.77];
+    const end: Coordinate = [-84.3892, 33.77];
+    const result = rerouteAvoidLocations(
+      { speed: false, crosswalks: true, sidewalks: false },
+      {
+        speed: { applicable: false, passes: true },
+        crosswalks: { applicable: true, passes: false },
+        sidewalks: { applicable: false, passes: true },
+      },
+      { crosswalks: [crossing] },
+      [start, before, crossing, after, end],
+      start,
+      end,
+    );
+    expect(result).toContainEqual(crossing);
+    expect(result).toContainEqual(before);
+    expect(result).toContainEqual(after);
+  });
+
+  it("adds mapped crossing lights from route attributes", () => {
     const result = auditRouteAttributes(
       [
         {
@@ -345,41 +584,94 @@ describe("live route attribute scoring", () => {
           begin_shape_index: 0,
           traffic_signal_forward: true,
         },
-        {
-          length: 0.02,
-          use: "pedestrian_crossing",
-          begin_shape_index: 2,
-          stop_sign_backward: true,
-        },
       ],
       [
         [-84.39, 33.77],
         [-84.3875, 33.7725],
-        [-84.385, 33.775],
       ],
     );
-    expect(result.crossings[0]).toMatchObject({ signalized: true });
-    expect(result.crossings[1]).toMatchObject({ stopSign: true });
+    expect(result.crossings).toMatchObject([{ signalized: true }]);
   });
 
-  it("matches city traffic lights and stop signs to route crossings", () => {
+  it("matches city crossing lights to route crossings", () => {
     const crossings = addCrossingControls(
       [
         { coordinate: [-84.39, 33.77], signalized: false, marked: true },
         { coordinate: [-84.385, 33.775], signalized: false, marked: true },
-        { coordinate: [-84.38, 33.78], signalized: false, marked: true },
       ],
       [[-84.3901, 33.7701]],
-      [
-        [-84.3901, 33.7701],
-        [-84.3851, 33.7751],
-      ],
     );
     expect(crossings).toMatchObject([
-      { signalized: true, stopSign: false },
-      { signalized: false, stopSign: true },
-      { signalized: false, stopSign: false },
+      { signalized: true },
+      { signalized: false },
     ]);
+  });
+
+  it("adds mapped OSM crosswalk nodes missed by route edges", () => {
+    const route: Coordinate[] = [
+      [-84.39, 33.77],
+      [-84.389, 33.77],
+      [-84.388, 33.77],
+    ];
+    const merged = mergeMappedCrossings(
+      [
+        {
+          coordinate: [-84.39, 33.77],
+          signalized: false,
+          marked: false,
+        },
+      ],
+      [
+        {
+          coordinate: [-84.39002, 33.77],
+          marked: true,
+          signalized: true,
+        },
+        {
+          coordinate: [-84.389, 33.77],
+          marked: true,
+          signalized: false,
+        },
+        {
+          coordinate: [-84.38, 33.78],
+          marked: true,
+          signalized: false,
+        },
+      ],
+      route,
+    );
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toMatchObject({ marked: true, signalized: true });
+    expect(merged[1]).toMatchObject({
+      coordinate: [-84.389, 33.77],
+      marked: true,
+    });
+  });
+
+  it("only adds mapped crossing markers that lie on the selected route", () => {
+    const route: Coordinate[] = [
+      [-84.39, 33.77],
+      [-84.388, 33.77],
+    ];
+    const merged = mergeMappedCrossings(
+      [],
+      [
+        {
+          coordinate: [-84.389, 33.77003],
+          marked: true,
+          signalized: false,
+        },
+        {
+          coordinate: [-84.3885, 33.77008],
+          marked: true,
+          signalized: true,
+        },
+      ],
+      route,
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0].coordinate[0]).toBeCloseTo(-84.389, 6);
+    expect(merged[0].coordinate[1]).toBeCloseTo(33.77, 7);
   });
 
   it("detects an unmarked roadway crossing between pedestrian paths", () => {

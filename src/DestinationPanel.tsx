@@ -1,4 +1,4 @@
-import { Check, Home, Navigation } from "lucide-react";
+import { Check, Footprints, Home } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Place } from "../shared/demo";
 import {
@@ -23,10 +23,10 @@ type Props = {
   hasStart: boolean;
   routes: Route[];
   requirements: Requirements;
+  avoidBusyRoads: boolean;
   loading: boolean;
   error: string;
   home?: PlannerSaved;
-  busy: boolean;
   walking: boolean;
   tripContent: ReactNode;
   onStart: (place: Place) => void;
@@ -34,7 +34,7 @@ type Props = {
   onLocate: () => void;
   onHome: () => void;
   onRequirements: (requirements: Requirements) => void;
-  onWalk: () => void;
+  onAvoidBusyRoads: (enabled: boolean) => void;
 };
 
 export default function DestinationPanel(p: Props) {
@@ -118,9 +118,20 @@ export default function DestinationPanel(p: Props) {
 
           <section className="route-factors" aria-label="Route factors">
             <div className="route-factors-heading">
-              <h3>Required route factors</h3>
+              <h3>Route factors</h3>
             </div>
             <div className="factor-list">
+              <label className="factor-check">
+                <input
+                  type="checkbox"
+                  disabled={p.walking}
+                  checked={p.avoidBusyRoads}
+                  onChange={(event) => p.onAvoidBusyRoads(event.target.checked)}
+                />
+                <span>
+                  <strong>Avoid busier roads</strong>
+                </span>
+              </label>
               {requirementKeys.map((key) => (
                 <label className="factor-check" key={key}>
                   <input
@@ -142,19 +153,63 @@ export default function DestinationPanel(p: Props) {
             </div>
           </section>
 
-          {p.tripContent}
-          {!p.walking && selected && !p.error && (
-            <div className="walk-actions">
-              <button
-                className="primary start-walk"
-                disabled={p.busy}
-                onClick={p.onWalk}
-              >
-                <Navigation size={19} />
-                Start Walk
-              </button>
-            </div>
+          {selected && !p.error && (
+            <details className="map-key" open>
+              <summary>Map key</summary>
+              <div className="map-key-items">
+                <span>
+                  <img
+                    src="/map-key/route.png"
+                    alt=""
+                    className="map-key-image"
+                  />
+                  Route (blue)
+                </span>
+                <span>
+                  <img
+                    src="/map-key/sidewalk.png"
+                    alt=""
+                    className="map-key-image"
+                  />
+                  Sidewalk (red dashed)
+                </span>
+                <span>
+                  <img
+                    src="/map-key/local.png"
+                    alt=""
+                    className="map-key-image"
+                  />
+                  Less busy road (white)
+                </span>
+                <span>
+                  <img
+                    src="/map-key/busy.png"
+                    alt=""
+                    className="map-key-image"
+                  />
+                  Busier road (yellow)
+                </span>
+                <span>
+                  <span className="map-key-walking marked">
+                    <Footprints aria-hidden="true" strokeWidth={2.4} />
+                  </span>
+                  Crossing symbol
+                </span>
+                <span>
+                  <span className="map-key-walking signalized">
+                    <Footprints aria-hidden="true" strokeWidth={2.4} />
+                  </span>
+                  Crossing symbol (crossing lights)
+                </span>
+                <span>
+                  <span className="map-key-warning-strip" aria-hidden="true" />
+                  Suspected no crossing markings
+                </span>
+              </div>
+            </details>
           )}
+
+          {p.tripContent}
         </>
       )}
     </>

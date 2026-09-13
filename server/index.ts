@@ -114,6 +114,7 @@ app.post("/api/routes", async (req, res) => {
       start: coordinateSchema,
       end: coordinateSchema,
       requirements: requirementSchema,
+      avoidBusyRoads: z.boolean().default(true),
     })
     .safeParse(req.body);
   if (!input.success) {
@@ -147,11 +148,12 @@ app.post("/api/routes", async (req, res) => {
         input.data.start,
         input.data.end,
         input.data.requirements,
+        input.data.avoidBusyRoads,
       ),
       live: true,
       source: "OpenStreetMap pedestrian routes via Valhalla",
       requirementNote:
-        "The selected route fulfills every checked requirement using mapped OpenStreetMap route attributes.",
+        "The selected route fulfills every checked requirement using mapped route attributes.",
     });
   } catch (error) {
     if (error instanceof RouteNotPossibleError) {
