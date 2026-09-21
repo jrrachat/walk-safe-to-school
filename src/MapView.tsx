@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  type RefObject,
+} from "react";
 import * as maplibregl from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 // Vite must bundle the separate MapLibre 6 worker, including its imports.
@@ -16,6 +22,7 @@ import { isAtlantaSchool } from "../shared/schools";
 import { useSchools } from "./lib/useSchools";
 
 type Props = {
+  exportMap?: RefObject<maplibregl.Map | null>;
   routes: Route[];
   selected: string;
   start: Place;
@@ -85,6 +92,7 @@ export function crossingWarningStrip(
 }
 
 export default function MapView({
+  exportMap,
   routes,
   selected,
   start,
@@ -176,6 +184,7 @@ export default function MapView({
     try {
       instance = new maplibregl.Map({
         container: container.current,
+        canvasContextAttributes: { preserveDrawingBuffer: true },
         center: [-84.3805, 33.784],
         zoom: 14.7,
         style: import.meta.env.VITE_MAP_STYLE_URL || {
@@ -200,6 +209,7 @@ export default function MapView({
         },
       });
       map.current = instance;
+      if (exportMap) exportMap.current = instance;
       // Style readiness does not wait for remote map tiles. Routes still render if tiles fail.
       instance.on("style.load", () => {
         setReady(true);
@@ -250,6 +260,7 @@ export default function MapView({
     return () => {
       instance?.remove();
       map.current = null;
+      if (exportMap) exportMap.current = null;
     };
   }, []);
   useEffect(() => {

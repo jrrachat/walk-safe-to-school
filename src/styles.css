@@ -1558,3 +1558,46 @@ select {
 .place-search.bold-value .search-input input {
   font-weight: 700;
 }
+
+.route-downloads {
+  margin: 14px 0;
+  border-top: 1px solid #dbe4ed;
+  padding-top: 12px;
+}
+.route-downloads p {
+  margin: 0 0 9px;
+  font-size: 12px;
+  color: #46596d;
+}
+.route-downloads > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.route-downloads button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 9px 10px;
+  border: 1px solid #c7d8e9;
+  border-radius: 8px;
+  background: white;
+  color: #1556a0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.route-downloads button:hover {
+  background: #edf5ff;
+}
+.route-downloads button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.route-downloads button:focus-visible {
+  outline: 2px solid #1556a0;
+  outline-offset: 2px;
+}

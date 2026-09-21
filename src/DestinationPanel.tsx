@@ -1,4 +1,4 @@
-import { Check, Footprints, Home } from "lucide-react";
+import { Check, Download, Footprints, Home } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Place } from "../shared/demo";
 import {
@@ -9,6 +9,7 @@ import {
   type Route,
 } from "../shared/routing";
 import PlaceSearch from "./PlaceSearch";
+import type { ExportFormat } from "./lib/routeExport";
 
 export type PlannerSaved = Place & {
   label: string;
@@ -25,6 +26,8 @@ type Props = {
   requirements: Requirements;
   avoidBusyRoads: boolean;
   loading: boolean;
+  exporting: boolean;
+  onExport: (format: ExportFormat) => void;
   error: string;
   home?: PlannerSaved;
   walking: boolean;
@@ -96,7 +99,7 @@ export default function DestinationPanel(p: Props) {
               <strong>{p.error}</strong>
             </div>
           )}
-          {selected && !p.error && (
+          {selected && !p.error && !p.loading && (
             <div className="route-list">
               <div className="route-card selected safest-card">
                 <div className="route-top">
@@ -104,6 +107,29 @@ export default function DestinationPanel(p: Props) {
                   <span className="route-radio">
                     <Check size={12} />
                   </span>
+                </div>
+                <div
+                  className="route-downloads"
+                  aria-label="Download route with compass"
+                >
+                  <p>Take the route with you, compass included.</p>
+                  <div>
+                    <button
+                      disabled={p.exporting}
+                      onClick={() => p.onExport("png")}
+                    >
+                      <Download size={16} aria-hidden="true" /> Download PNG
+                    </button>
+                    <button
+                      disabled={p.exporting}
+                      onClick={() => p.onExport("pdf")}
+                    >
+                      <Download size={16} aria-hidden="true" /> Download PDF
+                    </button>
+                  </div>
+                  {p.exporting && (
+                    <p role="status">Preparing your route map...</p>
+                  )}
                 </div>
                 <div className="route-stats">
                   <span>

@@ -4,6 +4,8 @@ import MapView from "./MapView";
 import BottomSheet, { type SheetState } from "./BottomSheet";
 import DestinationPanel from "./DestinationPanel";
 import PlaceSearch from "./PlaceSearch";
+import type { Map as RouteMap } from "maplibre-gl";
+import { downloadRoute, type ExportFormat } from "./lib/routeExport";
 import {
   schools as places,
   demoStart,
@@ -78,6 +80,8 @@ const readSavedHome = (): SavedPlace | undefined => {
   }
 };
 export default function App() {
+  const exportMap = useRef<RouteMap | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [hasDestination, setHasDestination] = useState(false);
   const [hasStart, setHasStart] = useState(false);
   const [sheet, setSheet] = useState<SheetState>("half");
@@ -335,6 +339,23 @@ export default function App() {
       setBusy(false);
     }
   }
+  async function exportRoute(format: ExportFormat) {
+    if (exporting || !selected || loading || routeError) return;
+    setExporting(true);
+    try {
+      if (!exportMap.current)
+        throw new Error("Wait for the map to load, then try again.");
+      await downloadRoute(format, exportMap.current, selected, start, end);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not download the route. Please try again.",
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
   function openHome() {
     setHomeCandidate(home || null);
     setModal("home");
@@ -426,9 +447,11 @@ export default function App() {
               requirements={requirements}
               avoidBusyRoads={avoidBusyRoads}
               loading={loading}
+              exporting={exporting}
+              onExport={exportRoute}
               error={routeError}
               home={home}
-              walking={!!trip}
+              walking={!!trip || exporting}
               tripContent={
                 <>
                   {" "}
@@ -744,12 +767,14 @@ export default function App() {
         </BottomSheet>
         <section className="map-region" aria-label="Atlanta route map">
           <MapView
+            exportMap={exportMap}
             routes={mapRoutes}
             selected={selected?.category || "Lower Risk"}
             start={start}
             showStart={hasStart}
             end={hasDestination ? end : undefined}
             onPick={(p) => {
+              if (exporting) return;
               if (trip) {
                 setNotice("End your walk before changing the destination.");
                 return;
