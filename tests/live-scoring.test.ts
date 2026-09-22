@@ -125,6 +125,74 @@ describe("live route attribute scoring", () => {
     expect(locations.every(([longitude]) => longitude < -84.391)).toBe(true);
   });
 
+  it("targets high-traffic and high-speed local roads", () => {
+    const coordinates: Coordinate[] = [
+      [-84.4, 33.77],
+      [-84.398, 33.77],
+      [-84.396, 33.77],
+      [-84.394, 33.77],
+    ];
+    const edge = {
+      length: 0.55,
+      use: "road",
+      road_class: "residential",
+      begin_shape_index: 0,
+      end_shape_index: 3,
+    };
+    const station = {
+      id: "busy-local",
+      coordinate: [-84.397, 33.77] as Coordinate,
+      aadt: 18_000,
+      functionalClass: 6,
+      statisticsType: "Actual",
+    };
+    expect(
+      busyRoadAvoidLocations(
+        [edge],
+        coordinates,
+        coordinates[0],
+        coordinates.at(-1)!,
+        [station],
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      busyRoadAvoidLocations(
+        [{ ...edge, speed_limit: 64 }],
+        coordinates,
+        coordinates[0],
+        coordinates.at(-1)!,
+        [],
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not attach a nearby parallel-road count to the route", () => {
+    const exposure = trafficExposure(
+      [
+        {
+          length: 0.55,
+          use: "road",
+          road_class: "residential",
+          begin_shape_index: 0,
+          end_shape_index: 1,
+        },
+      ],
+      [
+        [-84.4, 33.77],
+        [-84.394, 33.77],
+      ],
+      [
+        {
+          id: "parallel-road",
+          coordinate: [-84.397, 33.773],
+          aadt: 40_000,
+          functionalClass: 6,
+          statisticsType: "Actual",
+        },
+      ],
+    );
+    expect(exposure).toBeLessThan(0.3);
+  });
   it("makes traffic the largest factor when avoiding busier roads", () => {
     const features = { sidewalk: 0.4, crossings: 0.4, speed: 0.4 };
     const preferred = scoreLiveRisk(features, 0.8, defaults, true);

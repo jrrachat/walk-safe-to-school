@@ -709,42 +709,61 @@ function nearbyTrafficStations(coordinate: Coordinate, grid: TrafficGrid) {
   return stations;
 }
 
+function edgeTrafficRisk(
+  edge: RouteAttributeEdge,
+  edgeIndex: number,
+  edges: RouteAttributeEdge[],
+  coordinates: Coordinate[],
+  grid: TrafficGrid,
+) {
+  if (dedicatedWalkingUse.test(edge.use || ""))
+    return { risk: 0, measuredAadt: 0 };
+  if (!roadLikeUse.test(edge.use || "")) return { risk: 0.15, measuredAadt: 0 };
+  const rank = roadClassRanks[edge.road_class || ""] || 6;
+  const geometry = edgeGeometry(edge, edgeIndex, edges, coordinates);
+  const stations = new Map<string, TrafficStation>();
+  for (const coordinate of sampleCoordinates(geometry, 12))
+    for (const station of nearbyTrafficStations(coordinate, grid))
+      stations.set(station.id, station);
+  // Match counts to the traveled edge, not a broad circle that can borrow a parallel arterial's traffic.
+  const matches = [...stations.values()]
+    .map((station) => ({
+      station,
+      meters: routePointDistance(station.coordinate, geometry),
+    }))
+    .filter(
+      ({ station, meters }) =>
+        meters <= 120 && Math.abs(station.functionalClass - rank) <= 1,
+    )
+    .sort((a, b) => a.meters - b.meters)
+    .slice(0, 3);
+  const measuredAadt = matches.length
+    ? matches.reduce(
+        (sum, match) => sum + match.station.aadt / Math.max(25, match.meters),
+        0,
+      ) /
+      matches.reduce((sum, match) => sum + 1 / Math.max(25, match.meters), 0)
+    : 0;
+  return {
+    risk: Math.max(
+      trafficRiskFromAadt(measuredAadt),
+      trafficRiskFromAadt(fallbackAadtByClass[rank]),
+    ),
+    measuredAadt,
+  };
+}
 export function trafficExposure(
   edges: RouteAttributeEdge[],
   coordinates: Coordinate[],
   stations?: TrafficStation[],
 ) {
   const grid = stations ? buildTrafficGrid(stations) : trafficGrid;
-  return weightedAverage(edges, (edge) => {
-    if (dedicatedWalkingUse.test(edge.use || "")) return 0;
-    if (!roadLikeUse.test(edge.use || "")) return 0.15;
-    const rank = roadClassRanks[edge.road_class || ""] || 6;
-    const edgeIndex = edges.indexOf(edge);
-    const coordinate = edgeCoordinate(edge, edgeIndex, edges, coordinates);
-    const matches = nearbyTrafficStations(coordinate, grid)
-      .map((station) => ({
-        station,
-        meters: distance(coordinate, station.coordinate),
-      }))
-      .filter(
-        ({ station, meters }) =>
-          meters <= 650 && Math.abs(station.functionalClass - rank) <= 1,
-      )
-      .sort((a, b) => a.meters - b.meters)
-      .slice(0, 3);
-    const measuredAadt = matches.length
-      ? matches.reduce(
-          (sum, match) => sum + match.station.aadt / Math.max(75, match.meters),
-          0,
-        ) /
-        matches.reduce((sum, match) => sum + 1 / Math.max(75, match.meters), 0)
-      : 0;
-    const measuredRisk = trafficRiskFromAadt(measuredAadt);
-    const roadClassRisk = trafficRiskFromAadt(fallbackAadtByClass[rank]);
-    return Math.max(measuredRisk, roadClassRisk);
-  });
+  return weightedAverage(
+    edges,
+    (edge) =>
+      edgeTrafficRisk(edge, edges.indexOf(edge), edges, coordinates, grid).risk,
+  );
 }
-
 function coordinateAtFraction(geometry: Coordinate[], fraction: number) {
   if (geometry.length === 1) return geometry[0];
   const position = fraction * (geometry.length - 1);
@@ -762,12 +781,34 @@ export function busyRoadAvoidLocations(
   coordinates: Coordinate[],
   start: Coordinate,
   destination: Coordinate,
+  stations?: TrafficStation[],
 ) {
+  const grid = stations ? buildTrafficGrid(stations) : trafficGrid;
   const locations: Coordinate[] = [];
   for (const [index, edge] of edges.entries()) {
     const rank = roadClassRanks[edge.road_class || ""] || 6;
     const lengthMeters = (edge.length || 0) * 1000;
-    if (!roadLikeUse.test(edge.use || "") || rank > 4 || lengthMeters < 60)
+    const { risk: trafficRisk, measuredAadt } = edgeTrafficRisk(
+      edge,
+      index,
+      edges,
+      coordinates,
+      grid,
+    );
+    const speedRisk =
+      typeof edge.speed_limit === "number"
+        ? clamp((edge.speed_limit - 16) / 64)
+        : 0;
+    const needsAvoidance =
+      rank <= 4 ||
+      measuredAadt >= 8_000 ||
+      trafficRisk >= 0.7 ||
+      speedRisk >= 0.5;
+    if (
+      !roadLikeUse.test(edge.use || "") ||
+      !needsAvoidance ||
+      lengthMeters < 60
+    )
       continue;
     const geometry = edgeGeometry(edge, index, edges, coordinates);
     const sampleCount = Math.min(3, Math.max(1, Math.ceil(lengthMeters / 180)));

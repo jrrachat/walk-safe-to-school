@@ -413,7 +413,7 @@ export default function App() {
           }}
         >
           <span className="brand-icon">
-            <Footprints size={23} />
+            <Footprints size={32} strokeWidth={2} aria-hidden="true" />
           </span>
           <span>Walkwise</span>
         </a>
