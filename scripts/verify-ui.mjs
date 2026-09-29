@@ -109,6 +109,8 @@ try {
   await expect(
     page.getByRole("heading", { name: "Data & APIs" }),
   ).toBeVisible();
+  await expect(page.locator(".docs-disclosure")).toHaveCount(3);
+  await page.getByText("Routing algorithm", { exact: true }).first().click();
   await expect(page.locator(".api-row")).toHaveCount(12);
   await expect(
     page.getByRole("heading", { name: "Routing algorithm" }),
@@ -197,7 +199,7 @@ try {
     name: /Avoid busier roads/,
   });
   const speedFactor = page.getByRole("checkbox", {
-    name: /No roads over 35 mph/,
+    name: /No known roads over 35 mph/,
   });
   const crosswalkFactor = page.getByRole("checkbox", {
     name: /Crosswalks at required crossings/,
@@ -325,7 +327,7 @@ try {
     page.getByText("Less busy road (white)", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Sidewalk (red dashed)", { exact: true }),
+    page.getByText("Mapped walking path (colors vary)", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Route (blue)", { exact: true })).toBeVisible();
   await expect(page.locator(".map-key-image")).toHaveCount(4);

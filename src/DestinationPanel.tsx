@@ -45,6 +45,12 @@ export default function DestinationPanel(p: Props) {
   const routeReady = p.hasDestination && p.hasStart;
   const selected = p.routes[0];
   const crossings = displayCrossings(selected?.crossings || []);
+  const hasUnmetRequirements = Boolean(
+    selected &&
+      requirementKeys.some(
+        (key) => p.requirements[key] && !selected.checks?.[key].passes,
+      ),
+  );
 
   return (
     <>
@@ -103,11 +109,21 @@ export default function DestinationPanel(p: Props) {
             <div className="route-list">
               <div className="route-card selected safest-card">
                 <div className="route-top">
-                  <strong>Safest route</strong>
+                  <strong>
+                    {hasUnmetRequirements
+                      ? "Best available route"
+                      : "Safest route"}
+                  </strong>
                   <span className="route-radio">
                     <Check size={12} />
                   </span>
                 </div>
+                {hasUnmetRequirements && (
+                  <small>
+                    Review the red map warnings where a checked preference
+                    could not be confirmed.
+                  </small>
+                )}
                 <div
                   className="route-downloads"
                   aria-label="Download route with compass"
@@ -197,7 +213,7 @@ export default function DestinationPanel(p: Props) {
                     alt=""
                     className="map-key-image"
                   />
-                  Sidewalk (red dashed)
+                  Mapped walking path (colors vary)
                 </span>
                 <span>
                   <img

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 import {
   coordinateSchema,
+  meetsRequirements,
   requiredRoutes,
   requirementSchema,
   validateGraph,
@@ -143,17 +144,22 @@ app.post("/api/routes", async (req, res) => {
     return;
   }
   try {
+    const routes = await liveRoutes(
+      input.data.start,
+      input.data.end,
+      input.data.requirements,
+      input.data.avoidBusyRoads,
+    );
+    const allRequirementsMet = Boolean(
+      routes[0] && meetsRequirements(routes[0], input.data.requirements),
+    );
     res.json({
-      routes: await liveRoutes(
-        input.data.start,
-        input.data.end,
-        input.data.requirements,
-        input.data.avoidBusyRoads,
-      ),
+      routes,
       live: true,
       source: "OpenStreetMap pedestrian routes via Valhalla",
-      requirementNote:
-        "The selected route fulfills every checked requirement using mapped route attributes.",
+      requirementNote: allRequirementsMet
+        ? "The selected route fulfills every checked requirement using mapped route attributes."
+        : "This is the safest available pedestrian route. Review the mapped warnings where a checked preference could not be confirmed.",
     });
   } catch (error) {
     if (error instanceof RouteNotPossibleError) {

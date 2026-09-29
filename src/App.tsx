@@ -519,248 +519,226 @@ export default function App() {
                 </button>
                 <h1 id="docs-title">Data & APIs</h1>
               </div>
-              <div className="algorithm-docs">
-                <h2>Routing algorithm</h2>
-                <strong>
-                  Bidirectional A* with traffic and road-class exposure
-                </strong>
-                <ol>
-                  <li>Valhalla generates pedestrian route candidates.</li>
-                  <li>
-                    Walkwise scores sidewalk, crossing, speed, 2025 GDOT
-                    traffic, and OpenStreetMap road class, then checks every
-                    selected requirement.
-                  </li>
-                  <li>
-                    Failed locations and their short approaches are avoided in
-                    one parallel reroute pass.
-                  </li>
-                  <li>
-                    When Avoid busier roads is checked, traveled stretches of
-                    yellow main roads are excluded in a second candidate search.
-                  </li>
-                  <li>
-                    The lowest-risk passing route wins; walking time breaks a
-                    tie.
-                  </li>
-                </ol>
-                <h2>Variables</h2>
-                <div className="variable-list">
-                  <div>
-                    <code>M</code>
-                    <span>Missing-sidewalk exposure</span>
-                    <b>weight 9</b>
+              <details className="docs-disclosure">
+                <summary>Routing algorithm</summary>
+                <div className="algorithm-docs">
+                  <h2>Routing algorithm</h2>
+                  <strong>
+                    Bidirectional A* with traffic and road-class exposure
+                  </strong>
+                  <ol>
+                    <li>Valhalla generates pedestrian route candidates.</li>
+                    <li>
+                      Scores sidewalks, crossings, speed, 2025 GDOT traffic, and
+                      OpenStreetMap road class.
+                    </li>
+                    <li>Avoids failed areas in one parallel reroute.</li>
+                    <li>
+                      “Avoid busier roads” adds a search around yellow main
+                      roads.
+                    </li>
+                    <li>
+                      The lowest-risk passing route wins. If none passes, the
+                      best walkable route is shown with warnings.
+                    </li>
+                  </ol>
+                  <h2>Variables</h2>
+                  <div className="variable-list">
+                    <div>
+                      <code>M</code>
+                      <span>Missing-sidewalk exposure</span>
+                      <b>weight 9</b>
+                    </div>
+                    <div>
+                      <code>C</code>
+                      <span>Crossing exposure</span>
+                      <b>weight 7</b>
+                    </div>
+                    <div>
+                      <code>V</code>
+                      <span>Vehicle-speed exposure</span>
+                      <b>weight 6</b>
+                    </div>
+                    <div>
+                      <code>T</code>
+                      <span>Traffic and busier-road exposure</span>
+                      <b>weight 22 when enabled</b>
+                    </div>
                   </div>
-                  <div>
-                    <code>C</code>
-                    <span>Crossing exposure</span>
-                    <b>weight 7</b>
-                  </div>
-                  <div>
-                    <code>V</code>
-                    <span>Vehicle-speed exposure</span>
-                    <b>weight 6</b>
-                  </div>
-                  <div>
-                    <code>T</code>
-                    <span>Traffic and busier-road exposure</span>
-                    <b>weight 22 when enabled</b>
-                  </div>
-                </div>
-                <code className="algorithm-formula">
-                  R = 100 &times; (9M + 7C + 6V + wT) / (22 + w)
-                </code>
-                <p className="traffic-method">
-                  T is the larger of &#8730;(AADT / 40,000) and the
-                  OpenStreetMap road-class estimate, capped at 1. This keeps
-                  yellow main roads costly even when a nearby GDOT count is low
-                  or missing. The traffic weight w is 22 when Avoid busier roads
-                  is checked and 4 when it is off.
-                </p>
-                <div className="requirement-variables">
-                  <p>
-                    <code>avoidBusyRoads</code>
-                    Generates alternatives around traveled yellow main-road
-                    stretches, then prioritizes lower GDOT traffic exposure and
-                    less exposure to major road classes.
-                  </p>
-                  <p>
-                    <code>requirements.speed</code>
-                    Every mapped road is 35 mph or less. Higher speeds are
-                    labeled with the road name and mph.
-                  </p>
-                  <p>
-                    <code>requirements.crosswalks</code>
-                    Every required road crossing has a mapped crosswalk.
-                    Valhalla route edges and nearby OpenStreetMap crossing nodes
-                    are combined.
-                  </p>
-                  <p>
-                    <code>requirements.sidewalks</code>
-                    Sidewalks are checked by default. Walking-only paths
-                    qualify. Missing stretches are highlighted on the map.
-                  </p>
-                  <p>
-                    Speed, crosswalk, and sidewalk warnings within 180 meters of
-                    the destination school are ignored as part of the school's
-                    block.
-                  </p>
-                </div>
-              </div>
-              <h2 className="spaced">External data</h2>
-              <div className="api-list">
-                <a
-                  className="api-row"
-                  href="https://services1.arcgis.com/AQDHTHDrZzfsFsB5/ArcGIS/rest/services/pubgis_DBO_Education_Schools/FeatureServer/0"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Atlanta ArcGIS school directory</strong>
-                  <span>School names, types, addresses, and coordinates</span>
-                  <code>Education_Schools / FeatureServer / 0</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://gdottrafficdata.drakewell.com/publicmultinodemap.asp"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>GDOT TADA traffic counts</strong>
-                  <span>
-                    2025 annual average daily traffic by count station
-                  </span>
-                  <code>Traffic_Tabular.zip / AADT_2025</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://photon.komoot.io/"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Photon</strong>
-                  <span>Starting-address and place autocomplete</span>
-                  <code>photon.komoot.io/api</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://nominatim.org/"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Nominatim</strong>
-                  <span>Address lookup for selected map coordinates</span>
-                  <code>nominatim.openstreetmap.org/reverse</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://valhalla.github.io/valhalla/api/turn-by-turn/api-reference/"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Valhalla route API</strong>
-                  <span>
-                    Pedestrian route geometry, distance, and walking time
-                  </span>
-                  <code>valhalla1.openstreetmap.de/route</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://valhalla.github.io/valhalla/api/map-matching/api-reference/"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Valhalla trace attributes</strong>
-                  <span>
-                    Road sidewalk tags, speed limits, crosswalks, and crossing
-                    positions
-                  </span>
-                  <code>valhalla1.openstreetmap.de/trace_attributes</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://www.arcgis.com/home/item.html?id=b98b545b79604fdcb7598e059181ea44"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Atlanta Sidewalks Inventory</strong>
-                  <span>
-                    Atlanta sidewalk survey geometry and sidewalk types
-                  </span>
-                  <code>services2.arcgis.com/.../Sidewalks_Inventory</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://dpwgis.atlantaga.gov/hostingserver/rest/services/Signalized_Intersections/FeatureServer/0"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Atlanta Signalized Intersections</strong>
-                  <span>Traffic lights at route crossings</span>
-                  <code>dpwgis.atlantaga.gov/.../Signalized_Intersections</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://wiki.openstreetmap.org/wiki/Overpass_API"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Overpass API</strong>
-                  <span>
-                    Separately mapped sidewalks, pedestrian geometry, and
-                    crosswalk nodes
-                  </span>
-                  <code>overpass-api.de/api/interpreter</code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://www.openstreetmap.org/copyright"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>OpenStreetMap</strong>
-                  <span>Street network attributes and raster map tiles</span>
-                  <code>
-                    tile.openstreetmap.org/&#123;z&#125;/&#123;x&#125;/&#123;y&#125;.png
+                  <code className="algorithm-formula">
+                    R = 100 &times; (9M + 7C + 6V + wT) / (22 + w)
                   </code>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://developer.mozilla.org/en-US/docs/Web/API/Geolocation_API"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Browser Geolocation API</strong>
-                  <span>Current starting coordinates, with permission</span>
-                </a>
-                <a
-                  className="api-row"
-                  href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Storage_API"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>Browser Web Storage API</strong>
-                  <span>
-                    Home address and selected route factors on this device
-                  </span>
-                  <code>localStorage</code>
-                </a>
-              </div>
-              <h2 className="spaced">Walkwise endpoints</h2>
-              <div className="endpoint-list">
-                <code>GET /api/health</code>
-                <code>GET /api/schools</code>
-                <code>GET /api/search</code>
-                <code>GET /api/reverse</code>
-                <code>POST /api/routes</code>
-                <code>POST /api/route-details</code>
-              </div>
+                  <p className="traffic-method">
+                    T = max(&#8730;(AADT / 40,000), road-class estimate), capped
+                    at 1. The traffic weight w is 22 when enabled and 4
+                    otherwise.
+                  </p>
+                  <div className="requirement-variables">
+                    <p>
+                      <code>avoidBusyRoads</code>
+                      Avoids yellow main roads and prefers lower traffic.
+                    </p>
+                    <p>
+                      <code>requirements.speed</code>
+                      Requires mapped roads to be 35 mph or less.
+                    </p>
+                    <p>
+                      <code>requirements.crosswalks</code>
+                      Requires a mapped crosswalk at each road crossing.
+                    </p>
+                    <p>
+                      <code>requirements.sidewalks</code>
+                      Requires sidewalks or walking-only paths.
+                    </p>
+                    <p>Checks ignore the final 180 meters around the school.</p>
+                  </div>
+                </div>
+              </details>
+              <details className="docs-disclosure">
+                <summary>External data</summary>
+                <h2 className="spaced">External data</h2>
+                <div className="api-list">
+                  <a
+                    className="api-row"
+                    href="https://services1.arcgis.com/AQDHTHDrZzfsFsB5/ArcGIS/rest/services/pubgis_DBO_Education_Schools/FeatureServer/0"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Atlanta ArcGIS school directory</strong>
+                    <span>School details and locations</span>
+                    <code>Education_Schools / FeatureServer / 0</code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://gdottrafficdata.drakewell.com/publicmultinodemap.asp"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>GDOT TADA traffic counts</strong>
+                    <span>2025 daily traffic counts</span>
+                    <code>Traffic_Tabular.zip / AADT_2025</code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://photon.komoot.io/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Photon</strong>
+                    <span>Address autocomplete</span>
+                    <code>photon.komoot.io/api</code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://nominatim.org/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Nominatim</strong>
+                    <span>Coordinates to addresses</span>
+                    <code>nominatim.openstreetmap.org/reverse</code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://valhalla.github.io/valhalla/api/turn-by-turn/api-reference/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Valhalla route API</strong>
+                    <span>Walking routes, distance, and time</span>
+                    <code>valhalla1.openstreetmap.de/route</code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://valhalla.github.io/valhalla/api/map-matching/api-reference/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Valhalla trace attributes</strong>
+                    <span>Sidewalks, speeds, and crossings</span>
+                    <code>valhalla1.openstreetmap.de/trace_attributes</code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://www.arcgis.com/home/item.html?id=b98b545b79604fdcb7598e059181ea44"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Atlanta Sidewalks Inventory</strong>
+                    <span>Sidewalk locations and types</span>
+                    <code>services2.arcgis.com/.../Sidewalks_Inventory</code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://dpwgis.atlantaga.gov/hostingserver/rest/services/Signalized_Intersections/FeatureServer/0"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Atlanta Signalized Intersections</strong>
+                    <span>Signalized crossings</span>
+                    <code>
+                      dpwgis.atlantaga.gov/.../Signalized_Intersections
+                    </code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://wiki.openstreetmap.org/wiki/Overpass_API"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Overpass API</strong>
+                    <span>Mapped sidewalks and crosswalks</span>
+                    <code>overpass-api.de/api/interpreter</code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://www.openstreetmap.org/copyright"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>OpenStreetMap</strong>
+                    <span>Street data and map tiles</span>
+                    <code>
+                      tile.openstreetmap.org/&#123;z&#125;/&#123;x&#125;/&#123;y&#125;.png
+                    </code>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://developer.mozilla.org/en-US/docs/Web/API/Geolocation_API"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Browser Geolocation API</strong>
+                    <span>Current location, with permission</span>
+                  </a>
+                  <a
+                    className="api-row"
+                    href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Storage_API"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>Browser Web Storage API</strong>
+                    <span>Saved settings on this device</span>
+                    <code>localStorage</code>
+                  </a>
+                </div>
+              </details>
+              <details className="docs-disclosure">
+                <summary>Walkwise endpoints</summary>
+                <h2 className="spaced">Walkwise endpoints</h2>
+                <div className="endpoint-list">
+                  <code>GET /api/health</code>
+                  <code>GET /api/schools</code>
+                  <code>GET /api/search</code>
+                  <code>GET /api/reverse</code>
+                  <code>POST /api/routes</code>
+                  <code>POST /api/route-details</code>
+                </div>
+              </details>
               <p className="docs-note">
-                Sidewalk checks combine the Atlanta Sidewalks inventory with
-                mapped OpenStreetMap sidewalk geometry and Valhalla street tags.
-                Traffic exposure uses GDOT's 2025 annual average daily traffic
-                counts. Speed-limit and crossing checks depend on available map
-                attributes. Crossing symbols match route crossings to Atlanta's
-                mapped signalized-intersection records.
+                Checks use Atlanta and OpenStreetMap sidewalks, Valhalla street
+                tags, 2025 GDOT traffic, mapped speeds and crossings, and
+                Atlanta signal records. Coverage may be incomplete.
               </p>
             </section>
           )}

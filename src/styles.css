@@ -1433,6 +1433,36 @@ select {
   color: #943817;
 }
 
+.docs-disclosure {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.docs-disclosure > summary {
+  padding: 13px 14px;
+  color: #2d405a;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.docs-disclosure[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+.docs-disclosure .algorithm-docs {
+  border: 0;
+  border-radius: 0;
+}
+.docs-disclosure > .spaced,
+.docs-disclosure > .api-list,
+.docs-disclosure > .endpoint-list {
+  margin-left: 14px;
+  margin-right: 14px;
+}
+.docs-disclosure > :last-child {
+  margin-bottom: 14px;
+}
 .docs-page h2 {
   margin: 20px 0 10px;
   font-size: 13px;

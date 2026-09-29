@@ -46,7 +46,7 @@ export const defaultRequirements: Requirements = {
   sidewalks: true,
 };
 export const requirementLabels: Record<RequirementKey, string> = {
-  speed: "No roads over 35 mph",
+  speed: "No known roads over 35 mph",
   crosswalks: "Crosswalks at required crossings",
   sidewalks: "Sidewalks along the route",
 };
@@ -56,7 +56,7 @@ export const requirementFailureLabels: Record<RequirementKey, string> = {
   sidewalks: "Sidewalk missing",
 };
 export const requirementDescriptions: Record<RequirementKey, string> = {
-  speed: "Every road segment has a mapped speed limit of 35 mph or less.",
+  speed: "Every known mapped speed limit is 35 mph or less.",
   crosswalks: "Every detected road crossing uses a mapped crosswalk.",
   sidewalks:
     "Road segments have mapped sidewalks; walking-only paths also qualify.",

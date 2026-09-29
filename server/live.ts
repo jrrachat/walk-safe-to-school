@@ -37,6 +37,8 @@ const routeAttributesUrl =
   routingUrl.replace(/\/route\/?$/, "/trace_attributes");
 const sidewalkDataUrl =
   process.env.SIDEWALK_DATA_URL || "https://overpass-api.de/api/interpreter";
+const osmMapDataUrl =
+  process.env.OSM_MAP_DATA_URL || "https://api.openstreetmap.org/api/0.6/map.json";
 const atlantaSidewalkDataUrl =
   process.env.ATLANTA_SIDEWALK_DATA_URL ||
   "https://services2.arcgis.com/zLeajbicrDRLQcny/ArcGIS/rest/services/Sidewalks_Inventory/FeatureServer/2/query";
@@ -88,7 +90,9 @@ function buildTrafficGrid(stations: TrafficStation[]) {
   const grid: TrafficGrid = new Map();
   for (const station of stations) {
     const key = trafficGridKey(station.coordinate);
-    grid.set(key, [...(grid.get(key) || []), station]);
+    const bucket = grid.get(key);
+    if (bucket) bucket.push(station);
+    else grid.set(key, [station]);
   }
   return grid;
 }
@@ -102,6 +106,7 @@ type AttributeAudit = {
   alerts: RouteViolation[];
 };
 type RouteAnalysis = AttributeAudit & {
+  crossingAlternatives: MappedCrossing[];
   traffic: number;
   busyRoadLocations: Coordinate[];
 };
@@ -392,15 +397,35 @@ function weightedAverage(
   edges: RouteAttributeEdge[],
   value: (edge: RouteAttributeEdge) => number,
 ) {
-  const total = edges.reduce((sum, edge) => sum + (edge.length || 0), 0);
+  let total = 0;
+  let weightedTotal = 0;
+  for (const edge of edges) {
+    const length = edge.length || 0;
+    total += length;
+    weightedTotal += length * value(edge);
+  }
   if (!total) return 0.5;
-  return (
-    edges.reduce((sum, edge) => sum + (edge.length || 0) * value(edge), 0) /
-    total
-  );
+  return weightedTotal / total;
 }
+const kilometersPerMile = 1.609344;
+const maximumWalkingRoadSpeedKph = 35 * kilometersPerMile;
+
+function speedLimitMph(
+  speed: RouteAttributeEdge["speed_limit"],
+): number | undefined {
+  return typeof speed === "number"
+    ? Math.round((speed / kilometersPerMile) * 10) / 10
+    : undefined;
+}
+
+function speedRisk(speed: RouteAttributeEdge["speed_limit"]): number {
+  if (speed === "unlimited") return 1;
+  const speedKph = typeof speed === "number" ? speed : 65;
+  return clamp((speedKph - 16) / 64);
+}
+
 const dedicatedWalkingUse =
-  /^(sidewalk|footway|pedestrian|cycleway|path|steps|pedestrian_crossing)$/;
+  /^(sidewalk|footway|pedestrian|cycleway|mountain_bike|path|steps|pedestrian_crossing|other|egress_connection|platform_connection|transit_connection)$/;
 const roadLikeUse =
   /^(road|ramp|turn_channel|track|driveway|alley|parking_aisle|emergency_access|drive_through|culdesac|service_road|living_street)$/;
 function hasMappedSidewalk(edge: RouteAttributeEdge) {
@@ -550,10 +575,7 @@ export function osmAttributeFeatures(edges: RouteAttributeEdge[]) {
   });
   const speed = weightedAverage(edges, (edge) => {
     if (!roadLikeUse.test(edge.use || "")) return 0;
-    return clamp(
-      ((typeof edge.speed_limit === "number" ? edge.speed_limit : 65) - 16) /
-        64,
-    );
+    return speedRisk(edge.speed_limit);
   });
   const crossingRisk = clamp(crossings.length / Math.max(2, kilometers * 5));
   return {
@@ -647,27 +669,24 @@ function sidewalkViolationDetails(
 function speedViolationDetails(
   edges: RouteAttributeEdge[],
   coordinates: Coordinate[],
-  includeUnknown: boolean,
 ) {
   return edges.flatMap((edge, index): RouteViolation[] => {
     if (!roadLikeUse.test(edge.use || "")) return [];
     const speed = edge.speed_limit;
-    if (typeof speed === "number" && speed <= 56.327) return [];
-    if (typeof speed !== "number" && !includeUnknown) return [];
+    if (typeof speed === "number" && speed <= maximumWalkingRoadSpeedKph)
+      return [];
+    if (speed !== "unlimited" && typeof speed !== "number") return [];
     const roadName = edgeRoadName(edge);
-    const speedLimitMph =
-      typeof speed === "number"
-        ? Math.round((speed / 1.609344) * 10) / 10
-        : undefined;
+    const limitMph = speedLimitMph(speed);
     return [
       {
         coordinate: edgeCoordinate(edge, index, edges, coordinates),
         requirement: "speed" as const,
-        label: speedLimitMph
-          ? roadName + " — " + speedLimitMph + " mph"
-          : "Speed limit unavailable — " + roadName,
+        label: limitMph
+          ? roadName + " — " + limitMph + " mph"
+          : "No speed limit — " + roadName,
         roadName,
-        speedLimitMph,
+        speedLimitMph: limitMph,
         geometry: edgeGeometry(edge, index, edges, coordinates),
       },
     ];
@@ -758,11 +777,18 @@ export function trafficExposure(
   stations?: TrafficStation[],
 ) {
   const grid = stations ? buildTrafficGrid(stations) : trafficGrid;
-  return weightedAverage(
-    edges,
-    (edge) =>
-      edgeTrafficRisk(edge, edges.indexOf(edge), edges, coordinates, grid).risk,
-  );
+  let edgeIndex = 0;
+  return weightedAverage(edges, (edge) => {
+    const risk = edgeTrafficRisk(
+      edge,
+      edgeIndex,
+      edges,
+      coordinates,
+      grid,
+    ).risk;
+    edgeIndex++;
+    return risk;
+  });
 }
 function coordinateAtFraction(geometry: Coordinate[], fraction: number) {
   if (geometry.length === 1) return geometry[0];
@@ -795,15 +821,13 @@ export function busyRoadAvoidLocations(
       coordinates,
       grid,
     );
-    const speedRisk =
-      typeof edge.speed_limit === "number"
-        ? clamp((edge.speed_limit - 16) / 64)
-        : 0;
+    const edgeSpeedRisk =
+      edge.speed_limit == null ? 0 : speedRisk(edge.speed_limit);
     const needsAvoidance =
       rank <= 4 ||
       measuredAadt >= 8_000 ||
       trafficRisk >= 0.7 ||
-      speedRisk >= 0.5;
+      edgeSpeedRisk >= 0.5;
     if (
       !roadLikeUse.test(edge.use || "") ||
       !needsAvoidance ||
@@ -1021,12 +1045,7 @@ export function auditRouteAttributes(
     0,
   );
   const speedDetails = outsideDestinationSchoolBlock(
-    speedViolationDetails(edges, coordinates, true),
-    coordinates,
-    destination,
-  );
-  const speedAlertDetails = outsideDestinationSchoolBlock(
-    speedViolationDetails(edges, coordinates, false),
+    speedViolationDetails(edges, coordinates),
     coordinates,
     destination,
   );
@@ -1064,7 +1083,10 @@ export function auditRouteAttributes(
   return {
     features: osmAttributeFeatures(sidewalkAuditEdges),
     checks: {
-      speed: { applicable: roadEdges.length > 0, passes: speedPasses },
+      speed: {
+        applicable: roadEdges.some((edge) => edge.speed_limit != null),
+        passes: speedPasses,
+      },
       sidewalks: {
         applicable: sidewalkEdges.length > 0,
         passes: sidewalkPasses,
@@ -1085,7 +1107,7 @@ export function auditRouteAttributes(
       sidewalks: sidewalkDetails,
       crosswalks: crosswalkDetails,
     },
-    alerts: [...speedAlertDetails, ...sidewalkDetails],
+    alerts: [...speedDetails, ...sidewalkDetails],
   };
 }
 
@@ -1101,6 +1123,42 @@ function spacedCoordinates(coordinates: Coordinate[], maximum: number) {
   return result;
 }
 
+function routeApproachCoordinates(
+  targets: Coordinate[],
+  routeCoordinates: Coordinate[],
+  approachDistanceMeters: number,
+) {
+  return targets.flatMap((target) => {
+    let nearestIndex = 0;
+    let nearestDistance = Infinity;
+    for (const [index, coordinate] of routeCoordinates.entries()) {
+      const meters = distance(target, coordinate);
+      if (meters < nearestDistance) {
+        nearestDistance = meters;
+        nearestIndex = index;
+      }
+    }
+    const nearby: Coordinate[] = [];
+    for (const direction of [-1, 1]) {
+      let walked = 0;
+      for (
+        let index = nearestIndex;
+        index + direction >= 0 && index + direction < routeCoordinates.length;
+        index += direction
+      ) {
+        walked += distance(
+          routeCoordinates[index],
+          routeCoordinates[index + direction],
+        );
+        if (walked >= approachDistanceMeters) {
+          nearby.push(routeCoordinates[index + direction]);
+          break;
+        }
+      }
+    }
+    return nearby;
+  });
+}
 export function rerouteAvoidLocations(
   requirements: Requirements,
   checks: RequirementChecks,
@@ -1117,41 +1175,16 @@ export function rerouteAvoidLocations(
     spacedCoordinates(violations[key] || [], 4),
   );
   if (failed.includes("crosswalks")) {
-    const crossingAvoidance = spacedCoordinates(
-      violations.crosswalks || [],
-      3,
-    ).flatMap((crossing) => {
-      let nearestIndex = 0;
-      let nearestDistance = Infinity;
-      for (const [index, coordinate] of routeCoordinates.entries()) {
-        const meters = distance(crossing, coordinate);
-        if (meters < nearestDistance) {
-          nearestDistance = meters;
-          nearestIndex = index;
-        }
-      }
-      const nearby: Coordinate[] = [crossing];
-      for (const direction of [-1, 1]) {
-        let walked = 0;
-        for (
-          let index = nearestIndex;
-          index + direction >= 0 && index + direction < routeCoordinates.length;
-          index += direction
-        ) {
-          walked += distance(
-            routeCoordinates[index],
-            routeCoordinates[index + direction],
-          );
-          if (walked >= 45) {
-            nearby.push(routeCoordinates[index + direction]);
-            break;
-          }
-        }
-      }
-      return nearby;
-    });
-    targeted = [...targeted, ...crossingAvoidance];
+    targeted = [
+      ...targeted,
+      ...routeApproachCoordinates(
+        spacedCoordinates(violations.crosswalks || [], 3),
+        routeCoordinates,
+        45,
+      ),
+    ];
   }
+
   if (!targeted.length && failed.length) {
     const interior = routeCoordinates.filter(
       (coordinate) =>
@@ -1338,19 +1371,223 @@ export async function liveRouteDetails(coordinates: Coordinate[]) {
 
 export type MappedCrossing = {
   coordinate: Coordinate;
+  geometry?: Coordinate[];
   marked?: boolean;
   signalized: boolean;
 };
+const crossingTagsSchema = z.record(z.string(), z.string()).optional();
 const mappedCrossingsSchema = z.object({
   elements: z.array(
-    z.object({
-      type: z.literal("node"),
-      lat: z.number(),
-      lon: z.number(),
-      tags: z.record(z.string(), z.string()).optional(),
-    }),
+    z.union([
+      z.object({
+        type: z.literal("node"),
+        lat: z.number(),
+        lon: z.number(),
+        tags: crossingTagsSchema,
+      }),
+      z.object({
+        type: z.literal("way"),
+        geometry: z
+          .array(z.object({ lat: z.number(), lon: z.number() }))
+          .min(2),
+        tags: crossingTagsSchema,
+      }),
+    ]),
   ),
 });
+
+type MappedCrossingElement = z.infer<
+  typeof mappedCrossingsSchema
+>["elements"][number];
+
+export function parseMappedCrossings(elements: MappedCrossingElement[]) {
+  return elements.map((element): MappedCrossing => {
+    const tags = element.tags;
+    const crossing = tags?.crossing?.toLowerCase();
+    const markings = tags?.["crossing:markings"]?.toLowerCase();
+    const explicitlyUnmarked =
+      crossing === "unmarked" ||
+      crossing === "informal" ||
+      crossing === "no" ||
+      markings === "no" ||
+      markings === "none";
+    const coordinate: Coordinate =
+      element.type === "node"
+        ? [element.lon, element.lat]
+        : (() => {
+            const middle =
+              element.geometry[Math.floor(element.geometry.length / 2)];
+            return [middle.lon, middle.lat];
+          })();
+    return {
+      coordinate,
+      geometry:
+        element.type === "way"
+          ? element.geometry.map(({ lon, lat }): Coordinate => [lon, lat])
+          : undefined,
+      // highway=crossing and *way=crossing already identify crossing
+      // infrastructure; extra tags only refine its type.
+      marked: !explicitlyUnmarked,
+      signalized:
+        crossing === "traffic_signals" || tags?.["crossing:signals"] === "yes",
+    };
+  });
+}
+
+const osmMapSchema = z.object({
+  elements: z.array(
+    z
+      .object({
+        type: z.enum(["node", "way", "relation"]),
+        id: z.number(),
+        lat: z.number().optional(),
+        lon: z.number().optional(),
+        nodes: z.array(z.number()).optional(),
+        tags: z.record(z.string(), z.string()).optional(),
+      })
+      .passthrough(),
+  ),
+});
+
+async function fetchOsmMapElements(
+  coordinates: Coordinate[],
+  radiusMeters: number,
+  maximumPoints = 6,
+) {
+  const points = spacedCoordinates(
+    distinctCoordinates(coordinates, 120),
+    maximumPoints,
+  );
+  if (!points.length) return [];
+  const responses = await Promise.allSettled(
+    points.map(async ([lon, lat]) => {
+      const latitudeDelta = radiusMeters / 111_320;
+      const longitudeDelta =
+        radiusMeters / (111_320 * Math.cos((lat * Math.PI) / 180));
+      const url = new URL(osmMapDataUrl);
+      url.searchParams.set(
+        "bbox",
+        [
+          lon - longitudeDelta,
+          lat - latitudeDelta,
+          lon + longitudeDelta,
+          lat + latitudeDelta,
+        ].join(","),
+      );
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(6000),
+        headers: { ...serviceHeaders(), Accept: "application/json" },
+      });
+      if (!response.ok) throw new Error("OpenStreetMap crossing data unavailable");
+      return osmMapSchema.parse(await response.json()).elements;
+    }),
+  );
+  const fulfilled = responses.flatMap((response) =>
+    response.status === "fulfilled" ? [response.value] : [],
+  );
+  if (!fulfilled.length) throw new Error("OpenStreetMap map data unavailable");
+  return fulfilled;
+}
+
+async function fetchOsmMapCrossings(
+  coordinates: Coordinate[],
+  radiusMeters: number,
+) {
+  const responses = await fetchOsmMapElements(coordinates, radiusMeters);
+  const mapped: MappedCrossing[] = [];
+  const seen = new Set<string>();
+  for (const elements of responses) {
+    const nodes = new Map<number, Coordinate>();
+    for (const element of elements)
+      if (
+        element.type === "node" &&
+        typeof element.lon === "number" &&
+        typeof element.lat === "number"
+      )
+        nodes.set(element.id, [element.lon, element.lat]);
+    for (const element of elements) {
+      const tags = element.tags;
+      const isNodeCrossing =
+        element.type === "node" && tags?.highway === "crossing";
+      const isWayCrossing =
+        element.type === "way" &&
+        (tags?.highway === "crossing" ||
+          tags?.footway === "crossing" ||
+          tags?.cycleway === "crossing" ||
+          tags?.path === "crossing");
+      if (!isNodeCrossing && !isWayCrossing) continue;
+      const key = element.type + ":" + element.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (isNodeCrossing) {
+        mapped.push(
+          ...parseMappedCrossings([
+            {
+              type: "node",
+              lat: element.lat!,
+              lon: element.lon!,
+              tags,
+            },
+          ]),
+        );
+        continue;
+      }
+      const geometry = (element.nodes || []).flatMap((id) => {
+        const coordinate = nodes.get(id);
+        return coordinate
+          ? [{ lon: coordinate[0], lat: coordinate[1] }]
+          : [];
+      });
+      if (geometry.length < 2) continue;
+      mapped.push(
+        ...parseMappedCrossings([
+          { type: "way", geometry, tags },
+        ]),
+      );
+    }
+  }
+  return mapped;
+}
+
+async function fetchOsmMapSidewalks(coordinates: Coordinate[]) {
+  const responses = await fetchOsmMapElements(coordinates, 450, 8);
+  const sidewalks: SidewalkWay[] = [];
+  const seen = new Set<number>();
+  for (const elements of responses) {
+    const nodes = new Map<number, Coordinate>();
+    for (const element of elements)
+      if (
+        element.type === "node" &&
+        typeof element.lon === "number" &&
+        typeof element.lat === "number"
+      )
+        nodes.set(element.id, [element.lon, element.lat]);
+    for (const element of elements) {
+      if (element.type !== "way" || seen.has(element.id)) continue;
+      const tags = element.tags;
+      if (
+        !/^(footway|path|pedestrian|steps|cycleway)$/.test(
+          tags?.highway || "",
+        ) ||
+        tags?.footway === "crossing" ||
+        tags?.access === "private" ||
+        tags?.foot === "no"
+      )
+        continue;
+      const geometry = (element.nodes || []).flatMap((id) => {
+        const coordinate = nodes.get(id);
+        return coordinate ? [coordinate] : [];
+      });
+      if (geometry.length < 2) continue;
+      seen.add(element.id);
+      sidewalks.push({
+        explicit: tags?.footway === "sidewalk",
+        coordinates: geometry,
+      });
+    }
+  }
+  return sidewalks;
+}
 
 function routePointMatch(point: Coordinate, coordinates: Coordinate[]) {
   if (coordinates.length < 2) {
@@ -1405,21 +1642,27 @@ export function mergeMappedCrossings(
   crossings: RouteCrossing[],
   mappedCrossings: MappedCrossing[],
   coordinates: Coordinate[],
-  routeRadiusMeters = 5,
+  routeRadiusMeters = 12,
 ) {
   const merged = crossings.map((crossing) => ({ ...crossing }));
   for (const mapped of mappedCrossings) {
-    const existing = merged.find(
-      (crossing) => distance(crossing.coordinate, mapped.coordinate) <= 18,
+    const routeMatch = (mapped.geometry || [mapped.coordinate])
+      .map((point) => routePointMatch(point, coordinates))
+      .reduce((nearest, match) =>
+        match.distance < nearest.distance ? match : nearest,
+      );
+    if (routeMatch.distance > routeRadiusMeters) continue;
+    const existing = merged.filter(
+      (crossing) => distance(crossing.coordinate, routeMatch.coordinate) <= 35,
     );
-    if (existing) {
-      if (mapped.marked !== undefined) existing.marked = mapped.marked;
-      existing.signalized = existing.signalized || mapped.signalized;
+    if (existing.length) {
+      for (const crossing of existing) {
+        if (mapped.marked !== undefined) crossing.marked = mapped.marked;
+        crossing.signalized = crossing.signalized || mapped.signalized;
+      }
       continue;
     }
     if (mapped.marked !== true) continue;
-    const routeMatch = routePointMatch(mapped.coordinate, coordinates);
-    if (routeMatch.distance > routeRadiusMeters) continue;
     merged.push({
       coordinate: routeMatch.coordinate,
       marked: true,
@@ -1428,7 +1671,6 @@ export function mergeMappedCrossings(
   }
   return merged;
 }
-
 export function applyMappedCrossings(
   analysis: AttributeAudit,
   coordinates: Coordinate[],
@@ -1490,14 +1732,20 @@ export function applyMappedCrossings(
 }
 
 async function fetchMappedCrossings(routes: TracedRoute[]) {
-  const statements = routes.map((route) => {
+  const statements = routes.flatMap((route) => {
     const line = sampleCoordinates(route.coordinates, 55)
       .map(([lon, lat]) => lat + "," + lon)
       .join(",");
-    return 'node["highway"="crossing"](around:30,' + line + ");";
+    const around = "(around:30," + line + ");";
+    return [
+      'node["highway"="crossing"]' + around,
+      'way["footway"="crossing"]' + around,
+      'way["cycleway"="crossing"]' + around,
+      'way["path"="crossing"]' + around,
+    ];
   });
   const query =
-    "[out:json][timeout:15];(" + statements.join("") + ");out body;";
+    "[out:json][timeout:15];(" + statements.join("") + ");out geom;";
   const response = await fetch(sidewalkDataUrl, {
     method: "POST",
     signal: AbortSignal.timeout(4500),
@@ -1509,37 +1757,37 @@ async function fetchMappedCrossings(routes: TracedRoute[]) {
     body: new URLSearchParams({ data: query }),
   });
   if (!response.ok) throw new Error("Mapped crosswalk data unavailable");
-  return mappedCrossingsSchema
-    .parse(await response.json())
-    .elements.map(({ lon, lat, tags }): MappedCrossing => {
-      const crossing = tags?.crossing?.toLowerCase();
-      const markings = tags?.["crossing:markings"]?.toLowerCase();
-      const crossingRef = tags?.crossing_ref?.toLowerCase();
-      const explicitlyUnmarked =
-        crossing === "unmarked" ||
-        crossing === "no" ||
-        markings === "no" ||
-        markings === "none";
-      const explicitlyMarked =
-        crossing === "marked" ||
-        crossing === "zebra" ||
-        crossing === "traffic_signals" ||
-        crossing === "pelican" ||
-        crossing === "toucan" ||
-        crossingRef === "zebra" ||
-        Boolean(markings && markings !== "no" && markings !== "none");
-      return {
-        coordinate: [lon, lat],
-        marked: explicitlyUnmarked
-          ? false
-          : explicitlyMarked
-            ? true
-            : undefined,
-        signalized:
-          crossing === "traffic_signals" ||
-          tags?.["crossing:signals"] === "yes",
-      };
-    });
+  return parseMappedCrossings(
+    mappedCrossingsSchema.parse(await response.json()).elements,
+  );
+}
+
+function distinctCoordinates(
+  coordinates: Coordinate[],
+  minimumDistanceMeters: number,
+) {
+  const distinct: Coordinate[] = [];
+  for (const coordinate of coordinates) {
+    if (
+      distinct.every(
+        (candidate) => distance(candidate, coordinate) >= minimumDistanceMeters,
+      )
+    )
+      distinct.push(coordinate);
+  }
+  return distinct;
+}
+
+export function crossingAlternativeSearchPoints(gaps: Coordinate[]) {
+  return spacedCoordinates(
+    distinctCoordinates(spacedCoordinates(gaps, 32), 120),
+    4,
+  );
+}
+
+async function fetchCrossingsNearSidewalkGaps(gaps: Coordinate[]) {
+  const points = spacedCoordinates(distinctCoordinates(gaps, 120), 6);
+  return fetchOsmMapCrossings(points, 500);
 }
 
 const sidewalkWaysSchema = z.object({
@@ -1568,7 +1816,7 @@ async function fetchSeparateSidewalks(routes: TracedRoute[]) {
       .map(([lon, lat]) => lat + "," + lon)
       .join(",");
     return (
-      'way["highway"~"^(footway|path|pedestrian|steps)$"]' +
+      'way["highway"~"^(footway|path|pedestrian|steps|cycleway)$"]' +
       '["footway"!="crossing"]["access"!="private"]["foot"!="no"]' +
       "(around:32," +
       line +
@@ -1689,18 +1937,42 @@ async function analyzeTrips(
   if (!tracedRoutes.length) throw new Error("Route attributes unavailable");
   const sidewalkPromise = (async () => {
     if (!includeSidewalkInventory) return [] as SidewalkWay[];
-    const osmFallback = new Promise<void>((resolve) => setTimeout(resolve, 650))
-      .then(() => fetchSeparateSidewalks(tracedRoutes))
-      .catch(() => [] as SidewalkWay[]);
-    try {
-      return await fetchAtlantaSidewalks(tracedRoutes);
-    } catch {
-      return await osmFallback;
-    }
+    const atlantaInventory = await fetchAtlantaSidewalks(tracedRoutes).catch(
+      () => [] as SidewalkWay[],
+    );
+    const preliminaryGapGroups = tracedRoutes.map((traced) => {
+      const edges = addSeparateSidewalkEvidence(
+        traced.edges,
+        traced.coordinates,
+        atlantaInventory,
+      );
+      return (
+        auditRouteAttributes(edges, traced.coordinates, destination).violations
+          .sidewalks || []
+      );
+    });
+    const osmSearchPoints = distinctCoordinates(
+      preliminaryGapGroups.flatMap(crossingAlternativeSearchPoints),
+      120,
+    );
+    const osmWalkingWays = await fetchOsmMapSidewalks(
+      osmSearchPoints,
+    ).catch(() => fetchSeparateSidewalks(tracedRoutes).catch(() => []));
+    return [...atlantaInventory, ...osmWalkingWays];
   })();
-  const crossingPromise = includeMappedCrosswalks
-    ? fetchMappedCrossings(tracedRoutes).catch(() => [] as MappedCrossing[])
-    : Promise.resolve([] as MappedCrossing[]);
+  const suspectedCrossings = tracedRoutes.flatMap((traced) =>
+    auditRouteAttributes(traced.edges, traced.coordinates, destination)
+      .crossings.filter((crossing) => crossing.marked !== true)
+      .map((crossing) => crossing.coordinate),
+  );
+  const crossingPromise =
+    includeMappedCrosswalks || includeSidewalkInventory
+      ? fetchOsmMapCrossings(suspectedCrossings, 180).catch(() =>
+          fetchMappedCrossings(tracedRoutes).catch(
+            () => [] as MappedCrossing[],
+          ),
+        )
+      : Promise.resolve([] as MappedCrossing[]);
   const [separateSidewalks, mappedCrossings] = await Promise.all([
     sidewalkPromise,
     crossingPromise,
@@ -1726,6 +1998,7 @@ async function analyzeTrips(
         mappedCrossings,
         destination,
       ),
+      crossingAlternatives: mappedCrossings,
       traffic: trafficExposure(edges, traced.coordinates),
       busyRoadLocations: busyRoadAvoidLocations(
         edges,
@@ -1786,6 +2059,7 @@ function liveCandidate(
     violations,
     alerts,
     busyRoadLocations,
+    crossingAlternatives,
   } = analysis;
   const coordinates = tripCoordinates(trip);
   const meters = trip.summary.length * 1000;
@@ -1834,6 +2108,7 @@ function liveCandidate(
     violations,
     violationDetails: analysis.violationDetails,
     busyRoadLocations,
+    crossingAlternatives,
   };
 }
 type LiveCandidate = ReturnType<typeof liveCandidate>;
@@ -1904,16 +2179,126 @@ function failedRequirementCount(
 }
 
 function uniqueTrips(trips: LiveTrip[]) {
-  return trips.filter(
-    (trip, index, all) =>
-      all.findIndex(
-        (candidate) =>
-          candidate.legs.map((leg) => leg.shape).join("|") ===
-          trip.legs.map((leg) => leg.shape).join("|"),
-      ) === index,
-  );
+  const shapes = new Set<string>();
+  return trips.filter((trip) => {
+    const shape = trip.legs.map((leg) => leg.shape).join("|");
+    if (shapes.has(shape)) return false;
+    shapes.add(shape);
+    return true;
+  });
 }
 
+export function buildRouteRequest(
+  start: Coordinate,
+  end: Coordinate,
+  preferenceStrength: number,
+  personalized: boolean,
+  excludeLocations: Coordinate[] = [],
+  viaLocations: Coordinate[] = [],
+) {
+  return {
+    locations: [
+      { lat: start[1], lon: start[0] },
+      ...viaLocations.map(([lon, lat]) => ({ lat, lon, type: "via" as const })),
+      { lat: end[1], lon: end[0] },
+    ],
+    ...(excludeLocations.length
+      ? {
+          exclude_locations: excludeLocations.map(([lon, lat]) => ({
+            lat,
+            lon,
+          })),
+        }
+      : {}),
+    costing: "pedestrian",
+    ...(personalized
+      ? {
+          costing_options: {
+            pedestrian: {
+              walkway_factor: Math.max(0.2, 1 - preferenceStrength * 0.8),
+              sidewalk_factor: Math.max(0.2, 1 - preferenceStrength * 0.8),
+              alley_factor: 2 + preferenceStrength * 8,
+              driveway_factor: 5 + preferenceStrength * 12,
+            },
+          },
+        }
+      : {}),
+    units: "kilometers",
+    alternates: 2,
+    language: "en-US",
+  };
+}
+function crossingDistanceToPoint(crossing: MappedCrossing, point: Coordinate) {
+  return crossing.geometry?.length
+    ? routePointDistance(point, crossing.geometry)
+    : distance(point, crossing.coordinate);
+}
+
+function crossingWaypoints(crossing: MappedCrossing, start: Coordinate) {
+  const points = crossing.geometry?.length
+    ? [crossing.geometry[0], crossing.geometry.at(-1)!]
+    : [crossing.coordinate];
+  const unique = points.filter(
+    (point, index) =>
+      points.findIndex((candidate) => distance(candidate, point) < 2) === index,
+  );
+  return unique.length > 1 &&
+    distance(unique.at(-1)!, start) < distance(unique[0], start)
+    ? unique.reverse()
+    : unique;
+}
+
+const maximumCrossingDetourMeters = 600;
+
+export function sidewalkCrossingWaypointSets(
+  crossings: MappedCrossing[],
+  gaps: Coordinate[],
+  start: Coordinate,
+) {
+  if (!gaps.length) return [];
+  const seen = new Set<string>();
+  const ranked = crossings
+    .filter(
+      (crossing) =>
+        crossing.marked === true &&
+        gaps.some(
+          (gap) =>
+            crossingDistanceToPoint(crossing, gap) <=
+            maximumCrossingDetourMeters,
+        ),
+    )
+    .map((crossing) => {
+      const matches = gaps.map((gap) => ({
+        gap,
+        meters: crossingDistanceToPoint(crossing, gap),
+      }));
+      const nearest = matches.reduce((best, match) =>
+        match.meters < best.meters ? match : best,
+      );
+      return { crossing, gap: nearest.gap, meters: nearest.meters };
+    })
+    .sort(
+      (a, b) =>
+        a.meters - b.meters ||
+        Number(Boolean(b.crossing.geometry?.length)) -
+          Number(Boolean(a.crossing.geometry?.length)),
+    );
+  const diverse = ranked.filter((candidate, index, all) => {
+    const earlier = all.slice(0, index).filter((item) =>
+      distance(item.gap, candidate.gap) >= 250,
+    );
+    return earlier.length === index;
+  });
+  return [...diverse, ...ranked]
+    .flatMap(({ crossing }) => {
+      const waypoints = crossingWaypoints(crossing, start);
+      const key = waypoints.map((point) => point.join(",")).join("|");
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [waypoints];
+    })
+    .slice(0, 5);
+}
 export async function liveRoutes(
   start: Coordinate,
   end: Coordinate,
@@ -1926,41 +2311,22 @@ export async function liveRoutes(
   const requestRoutes = async (
     personalized: boolean,
     avoidLocations: Coordinate[] = [],
+    viaLocations: Coordinate[] = [],
   ) => {
     const response = await fetch(routingUrl, {
       method: "POST",
       signal: AbortSignal.timeout(10000),
       headers: { "Content-Type": "application/json", "X-Client-Id": clientId },
-      body: JSON.stringify({
-        locations: [
-          { lat: start[1], lon: start[0] },
-          { lat: end[1], lon: end[0] },
-        ],
-        ...(avoidLocations.length
-          ? {
-              avoid_locations: avoidLocations.map(([lon, lat]) => ({
-                lat,
-                lon,
-              })),
-            }
-          : {}),
-        costing: "pedestrian",
-        ...(personalized
-          ? {
-              costing_options: {
-                pedestrian: {
-                  walkway_factor: Math.max(0.2, 1 - preferenceStrength * 0.8),
-                  sidewalk_factor: Math.max(0.2, 1 - preferenceStrength * 0.8),
-                  alley_factor: 2 + preferenceStrength * 8,
-                  driveway_factor: 5 + preferenceStrength * 12,
-                },
-              },
-            }
-          : {}),
-        units: "kilometers",
-        alternates: 2,
-        language: "en-US",
-      }),
+      body: JSON.stringify(
+        buildRouteRequest(
+          start,
+          end,
+          preferenceStrength,
+          personalized,
+          avoidLocations,
+          viaLocations,
+        ),
+      ),
     });
     if (!response.ok) throw new Error("Live pedestrian routing unavailable");
     const payload = routeSchema.parse(await response.json());
@@ -1988,7 +2354,9 @@ export async function liveRoutes(
   );
   if (!candidates.length) throw new Error("Route attributes unavailable");
 
-  if (avoidBusyRoads) {
+  let selected = selectQualifyingRoute(candidates, requirements);
+
+  if (avoidBusyRoads && selected) {
     const currentBest = [...candidates].sort(
       (a, b) =>
         a.route.risk - b.route.risk || a.route.minutes - b.route.minutes,
@@ -2033,9 +2401,8 @@ export async function liveRoutes(
         } catch {}
       }
     }
+    selected = selectQualifyingRoute(candidates, requirements);
   }
-
-  let selected = selectQualifyingRoute(candidates, requirements);
 
   if (!selected) {
     const ranked = [...candidates].sort(
@@ -2046,16 +2413,27 @@ export async function liveRoutes(
     );
     const avoidanceSets = ranked
       .slice(0, 3)
-      .map((candidate) =>
-        rerouteAvoidLocations(
+      .map((candidate) => {
+        const locations = rerouteAvoidLocations(
           requirements,
           candidate.route.checks!,
           candidate.violations,
           candidate.route.coordinates,
           start,
           end,
-        ),
-      )
+        );
+        if (avoidBusyRoads)
+          for (const coordinate of candidate.busyRoadLocations) {
+            if (locations.length >= 12) break;
+            if (
+              locations.every(
+                (candidate) => distance(candidate, coordinate) > 35,
+              )
+            )
+              locations.push(coordinate);
+          }
+        return locations;
+      })
       .filter((locations) => locations.length)
       .filter(
         (locations, index, all) =>
@@ -2072,29 +2450,54 @@ export async function liveRoutes(
           ) === index,
       );
 
-    const rerouteResults = await Promise.allSettled(
-      avoidanceSets.map((locations) => requestRoutes(true, locations)),
+    const needsSidewalkRepair =
+      requirements.sidewalks &&
+      candidates.every((candidate) => !candidate.route.checks?.sidewalks.passes);
+    const sidewalkGapGroups = needsSidewalkRepair
+      ? ranked
+          .slice(0, 2)
+          .map((candidate) => candidate.violations.sidewalks || [])
+      : [];
+    const sidewalkGaps = sidewalkGapGroups.flat();
+    const crossingSearchPoints = distinctCoordinates(
+      sidewalkGapGroups.flatMap(crossingAlternativeSearchPoints),
+      120,
     );
+    const nearbyCrossings = needsSidewalkRepair
+      ? await fetchCrossingsNearSidewalkGaps(crossingSearchPoints).catch(
+          () => [] as MappedCrossing[],
+        )
+      : [];
+    const crossingWaypointSets = needsSidewalkRepair
+      ? sidewalkCrossingWaypointSets(
+          [
+            ...candidates.flatMap(
+              (candidate) => candidate.crossingAlternatives,
+            ),
+            ...nearbyCrossings,
+          ],
+          sidewalkGaps,
+          start,
+        )
+      : [];
+    const rerouteResults = await Promise.allSettled([
+      ...avoidanceSets
+        .slice(0, 3)
+        .map((locations) => requestRoutes(true, locations)),
+      ...crossingWaypointSets.map((waypoints) =>
+        requestRoutes(true, [], waypoints),
+      ),
+    ]);
     const knownShapes = new Set(
       trips.map((trip) => trip.legs.map((leg) => leg.shape).join("|")),
-    );
-    const knownMissingCrosswalks = candidates.flatMap(
-      (candidate) => candidate.violations.crosswalks || [],
     );
     const unseen = uniqueTrips(
       rerouteResults.flatMap((result) =>
         result.status === "fulfilled" ? result.value : [],
       ),
-    )
-      .filter(
-        (trip) => !knownShapes.has(trip.legs.map((leg) => leg.shape).join("|")),
-      )
-      .filter((trip) => {
-        const coordinates = tripCoordinates(trip);
-        return knownMissingCrosswalks.every(
-          (crossing) => routePointDistance(crossing, coordinates) > 12,
-        );
-      });
+    ).filter(
+      (trip) => !knownShapes.has(trip.legs.map((leg) => leg.shape).join("|")),
+    );
     if (unseen.length) {
       try {
         const retrySidewalkInventory =
@@ -2105,7 +2508,7 @@ export async function liveRoutes(
         const newAnalyses = await analyzeTrips(
           unseen,
           retrySidewalkInventory,
-          false,
+          requirements.crosswalks,
           end,
         );
         candidates.push(
@@ -2128,8 +2531,7 @@ export async function liveRoutes(
     }
   }
 
-  if (!selected)
-    throw new RouteNotPossibleError(failedRoute(candidates, requirements));
+  if (!selected) return [failedRoute(candidates, requirements)];
   return selected;
 }
 
@@ -2140,6 +2542,7 @@ export function liveProviders() {
     routing: new URL(routingUrl).hostname,
     routeAttributes: new URL(routeAttributesUrl).hostname,
     sidewalks: new URL(sidewalkDataUrl).hostname,
+    osmMapData: new URL(osmMapDataUrl).hostname,
     atlantaSidewalks: new URL(atlantaSidewalkDataUrl).hostname,
     trafficSignals: new URL(trafficSignalsDataUrl).hostname,
     trafficCounts: trafficData.source + " " + trafficData.year,

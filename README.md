@@ -15,7 +15,7 @@ Open http://127.0.0.1:5173. This starts both Vite and the API on port 3001. Map 
 
 ## Download a route
 
-Choose a starting point and school. Once a route is available, select **Download PNG** or **Download PDF** in the route card. The file includes the whole route, A/B endpoints, distance, walking time, and a north-up compass. The export uses the current map style and restores your map view afterward. Downloads are unavailable while routing or when the route fails the selected requirements.
+Choose a starting point and school. Once a route is available, select **Download PNG** or **Download PDF** in the route card. The file includes the whole route, A/B endpoints, distance, walking time, and a north-up compass. The export uses the current map style and restores your map view afterward. Downloads are unavailable while routing.
 
 ## Checks
 

@@ -5,15 +5,19 @@ import {
   applySchoolBlockSidewalkExemption,
   applyMappedCrossings,
   auditRouteAttributes,
+  buildRouteRequest,
   busyRoadAvoidLocations,
+  crossingAlternativeSearchPoints,
   osmAttributeFeatures,
   rerouteAvoidLocations,
   scoreLiveRisk,
+  sidewalkCrossingWaypointSets,
   trafficExposure,
   trafficRiskFromAadt,
   mergeMappedCrossings,
+  parseMappedCrossings,
 } from "../server/live";
-import { defaults, type Coordinate } from "../shared/routing";
+import { defaults, distance, type Coordinate } from "../shared/routing";
 
 describe("live route attribute scoring", () => {
   it("penalizes road exposure more than a dedicated pedestrian path", () => {
@@ -350,6 +354,17 @@ describe("live route attribute scoring", () => {
     ]);
   });
 
+  it("does not reject a route only because a speed limit is unmapped", () => {
+    const result = auditRouteAttributes(
+      [{ length: 1, use: "road", sidewalk: "both" }],
+      [
+        [-84.39, 33.77],
+        [-84.38, 33.78],
+      ],
+    );
+    expect(result.checks.speed).toEqual({ applicable: false, passes: true });
+    expect(result.features.speed).toBeGreaterThan(0.5);
+  });
   it("treats unlimited speed as failing the maximum-speed requirement", () => {
     const result = auditRouteAttributes(
       [{ length: 1, use: "road", speed_limit: "unlimited", sidewalk: "both" }],
@@ -643,6 +658,100 @@ describe("live route attribute scoring", () => {
     expect(result).toContainEqual(after);
   });
 
+  it("excludes only the missing-sidewalk edge so nearby crossings remain usable", () => {
+    const start: Coordinate = [-84.393, 33.77];
+    const gap: Coordinate = [-84.3906, 33.77];
+    const end: Coordinate = [-84.3882, 33.77];
+    const result = rerouteAvoidLocations(
+      { speed: false, crosswalks: false, sidewalks: true },
+      {
+        speed: { applicable: false, passes: true },
+        crosswalks: { applicable: false, passes: true },
+        sidewalks: { applicable: true, passes: false },
+      },
+      { sidewalks: [gap] },
+      [start, [-84.3918, 33.77], gap, [-84.3894, 33.77], end],
+      start,
+      end,
+    );
+    expect(result).toEqual([gap]);
+  });
+
+  it("sends unsafe route points using Valhalla's exclusion field", () => {
+    const request = buildRouteRequest(
+      [-84.393, 33.77],
+      [-84.3882, 33.77],
+      1,
+      true,
+      [[-84.3906, 33.77]],
+    );
+    expect(request).toMatchObject({
+      exclude_locations: [{ lat: 33.77, lon: -84.3906 }],
+      costing: "pedestrian",
+      alternates: 2,
+    });
+    expect(request).not.toHaveProperty("avoid_locations");
+  });
+  it("selects both ends of a nearby crossing way for a later crossing", () => {
+    const waypoints = sidewalkCrossingWaypointSets(
+      [
+        {
+          coordinate: [-84.45, 33.66],
+          geometry: [
+            [-84.4502, 33.6599],
+            [-84.45, 33.66],
+            [-84.4498, 33.6601],
+          ],
+          marked: true,
+          signalized: false,
+        },
+      ],
+      [[-84.45, 33.6603]],
+      [-84.451, 33.6595],
+    );
+    expect(waypoints).toEqual([
+      [
+        [-84.4502, 33.6599],
+        [-84.4498, 33.6601],
+      ],
+    ]);
+  });
+  it("bounds and spaces the wider crossing search for long routes", () => {
+    const gaps = Array.from(
+      { length: 80 },
+      (_, index): Coordinate => [-84.45 + index * 0.0002, 33.66],
+    );
+    const points = crossingAlternativeSearchPoints(gaps);
+    expect(points).toHaveLength(4);
+    expect(points[0]).toEqual(gaps[0]);
+    expect(distance(points.at(-1)!, gaps.at(-1)!)).toBeLessThan(120);
+    expect(
+      points.every(
+        (point, index) =>
+          index === 0 ||
+          Math.abs(point[0] - points[index - 1][0]) >= 0.001,
+      ),
+    ).toBe(true);
+  });
+  it("builds bounded via routes through both ends of a crossing way", () => {
+    const request = buildRouteRequest(
+      [-84.393, 33.77],
+      [-84.3882, 33.77],
+      1,
+      true,
+      [],
+      [
+        [-84.3907, 33.7699],
+        [-84.3907, 33.7701],
+      ],
+    );
+    expect(request.locations).toEqual([
+      { lat: 33.77, lon: -84.393 },
+      { lat: 33.7699, lon: -84.3907, type: "via" },
+      { lat: 33.7701, lon: -84.3907, type: "via" },
+      { lat: 33.77, lon: -84.3882 },
+    ]);
+  });
   it("adds mapped crossing lights from route attributes", () => {
     const result = auditRouteAttributes(
       [
@@ -675,6 +784,90 @@ describe("live route attribute scoring", () => {
     ]);
   });
 
+  it("accepts every mapped crosswalk color/type unless explicitly unmarked", () => {
+    const crossings = parseMappedCrossings([
+      {
+        type: "node",
+        lat: 33.77,
+        lon: -84.39,
+        tags: { highway: "crossing" },
+      },
+      {
+        type: "way",
+        geometry: [
+          { lat: 33.7699, lon: -84.389 },
+          { lat: 33.77, lon: -84.389 },
+          { lat: 33.7701, lon: -84.389 },
+        ],
+        tags: { highway: "footway", footway: "crossing" },
+      },
+      {
+        type: "way",
+        geometry: [
+          { lat: 33.77, lon: -84.3881 },
+          { lat: 33.77, lon: -84.388 },
+        ],
+        tags: { highway: "cycleway", cycleway: "crossing" },
+      },
+      {
+        type: "node",
+        lat: 33.77,
+        lon: -84.387,
+        tags: { highway: "crossing", crossing: "unmarked" },
+      },
+    ]);
+    expect(crossings).toMatchObject([
+      { marked: true },
+      { coordinate: [-84.389, 33.77], marked: true },
+      { marked: true },
+      { marked: false },
+    ]);
+  });
+  it("marks every duplicate route crossing in the same mapped crossing cluster", () => {
+    const route = [
+      [-84.3905, 33.77],
+      [-84.39, 33.77],
+      [-84.3895, 33.77],
+    ] as Coordinate[];
+    const result = mergeMappedCrossings(
+      [
+        { coordinate: [-84.3901, 33.77], marked: false, signalized: false },
+        { coordinate: [-84.3899, 33.77], marked: false, signalized: false },
+      ],
+      [
+        {
+          coordinate: [-84.39, 33.77],
+          marked: true,
+          signalized: false,
+        },
+      ],
+      route,
+    );
+    expect(result).toHaveLength(2);
+    expect(result.every((crossing) => crossing.marked)).toBe(true);
+  });
+
+  it("treats all pedestrian graph path and connection uses as walkable", () => {
+    const uses = [
+      "sidewalk",
+      "footway",
+      "pedestrian",
+      "cycleway",
+      "mountain_bike",
+      "path",
+      "steps",
+      "pedestrian_crossing",
+      "other",
+      "egress_connection",
+      "platform_connection",
+      "transit_connection",
+    ];
+    const result = osmAttributeFeatures(
+      uses.map((use) => ({ length: 1, use })),
+    );
+    expect(result.sidewalk).toBe(0);
+    expect(result.speed).toBe(0);
+  });
   it("adds mapped OSM crosswalk nodes missed by route edges", () => {
     const route: Coordinate[] = [
       [-84.39, 33.77],
@@ -716,6 +909,35 @@ describe("live route attribute scoring", () => {
     });
   });
 
+  it("recognizes a long BeltLine crossing way by its route intersection", () => {
+    const route: Coordinate[] = [
+      [-84.37, 33.77],
+      [-84.368, 33.77],
+    ];
+    const crossings = mergeMappedCrossings(
+      [
+        {
+          coordinate: [-84.369, 33.77],
+          marked: false,
+          signalized: false,
+        },
+      ],
+      [
+        {
+          coordinate: [-84.369, 33.771],
+          geometry: [
+            [-84.369, 33.771],
+            [-84.369, 33.77],
+            [-84.369, 33.769],
+          ],
+          marked: true,
+          signalized: false,
+        },
+      ],
+      route,
+    );
+    expect(crossings).toMatchObject([{ marked: true }]);
+  });
   it("only adds mapped crossing markers that lie on the selected route", () => {
     const route: Coordinate[] = [
       [-84.39, 33.77],
@@ -737,7 +959,7 @@ describe("live route attribute scoring", () => {
       ],
       route,
     );
-    expect(merged).toHaveLength(1);
+    expect(merged).toHaveLength(2);
     expect(merged[0].coordinate[0]).toBeCloseTo(-84.389, 6);
     expect(merged[0].coordinate[1]).toBeCloseTo(33.77, 7);
   });
