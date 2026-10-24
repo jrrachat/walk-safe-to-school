@@ -1,6 +1,11 @@
 import { ArrowLeft } from "lucide-react";
 import { defaults, trafficWeights } from "../shared/routing";
 
+const baseWeight = Object.values(defaults).reduce(
+  (sum, weight) => sum + weight,
+  0,
+);
+
 type Props = { onBack: () => void };
 
 export default function DocsPage({ onBack }: Props) {
@@ -114,20 +119,39 @@ export default function DocsPage({ onBack }: Props) {
 
       <details className="docs-disclosure">
         <summary>Scoring details</summary>
-        <p className="scoring-note">
-          Each candidate walking route gets a risk score from 0 to 100; lower is
-          better. The score is a weighted average of sidewalk gaps (
-          {defaults.sidewalk}), crossing exposure ({defaults.crossings}), speed
-          exposure ({defaults.speed}), and traffic ({trafficWeights.preferred}{" "}
-          when Avoid busier roads is on, or {trafficWeights.relaxed} when off).
-          These weights were chosen by testing route scenarios. Traffic uses
-          2025 GDOT counts where available and road type elsewhere. Among routes
-          that pass every selected check, the lowest risk score wins. If none
-          passes, the app chooses the route with the fewest unmet checks, then
-          the lowest risk score. Walking time breaks ties. The displayed route
-          stays fixed until you change the starting point, destination, or
-          preferences.
-        </p>
+        <div className="scoring-note">
+          <p>
+            For each candidate route <var>p</var>, sidewalk gaps <var>S</var>,
+            crossing exposure <var>C</var>, speed exposure <var>V</var>, and
+            traffic <var>T</var> are each scaled from 0 to 1. Its risk score is
+            from 0 to 100; lower is better.
+          </p>
+          <div className="scoring-math" aria-label="Route risk formula">
+            <div>
+              N(p) = {defaults.sidewalk}S(p) + {defaults.crossings}C(p)
+            </div>
+            <div className="math-indent">+ {defaults.speed}V(p) + wT(p)</div>
+            <div>R(p) = round(100 × N(p) / ({baseWeight} + w))</div>
+            <div>
+              w = {trafficWeights.preferred} if avoiding busier roads; otherwise{" "}
+              {trafficWeights.relaxed}
+            </div>
+          </div>
+          <p>
+            The weights were chosen by testing route scenarios. Traffic uses
+            2025 GDOT counts where available and road type elsewhere.
+          </p>
+          <div className="scoring-math" aria-label="Route selection formula">
+            <div>U(p) = number of selected checks that fail</div>
+            <div>p* = arg min (U(p), R(p), t(p), d(p))</div>
+          </div>
+          <p>
+            Compare the four values from left to right: unmet checks, risk,
+            walking time <var>t</var>, then distance <var>d</var>. A fixed
+            coordinate order breaks exact ties. The displayed route stays fixed
+            until you change the starting point, destination, or preferences.
+          </p>
+        </div>
       </details>
     </section>
   );

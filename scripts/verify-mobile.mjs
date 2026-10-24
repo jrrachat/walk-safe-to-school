@@ -180,12 +180,27 @@ try {
   await expect(page.locator(".docs-summary")).toBeVisible();
   await expect(page.locator(".map-region")).toBeHidden();
   await page.getByText("Data sources", { exact: true }).click();
+  await page.getByText("Scoring details", { exact: true }).click();
+  await expect(page.locator(".scoring-math")).toHaveCount(2);
+  expect(
+    await page
+      .locator(".scoring-note")
+      .evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth > innerWidth,
     ),
   ).toBe(false);
+  await page.locator(".scoring-math").last().scrollIntoViewIfNeeded();
   await page.screenshot({ path: ".qa/mobile-docs.png" });
+  await page.setViewportSize({ width: 320, height: 568 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth > innerWidth,
+    ),
+  ).toBe(false);
+  await expect(page.locator(".scoring-math")).toHaveCount(2);
   await page.getByRole("button", { name: "Back to map" }).click();
   await page.getByRole("button", { name: "Set home" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();

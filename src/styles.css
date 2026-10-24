@@ -1672,11 +1672,35 @@ button.crossing-warning-marker.likely:is(:hover, :focus-visible, .expanded):not(
   background: #eaf2ff;
 }
 .scoring-note {
-  margin: 0;
   padding: 11px 12px 13px;
   color: #40536b;
   font-size: 12px;
   line-height: 1.5;
+}
+.scoring-note p {
+  margin: 0 0 10px;
+}
+.scoring-note p:last-child {
+  margin-bottom: 0;
+}
+.scoring-math {
+  margin: 0 0 11px;
+  padding: 9px 10px;
+  border: 1px solid #dce6f2;
+  border-radius: 8px;
+  background: #f5f8fc;
+  color: #203957;
+  font:
+    600 11px/1.55 Consolas,
+    "Courier New",
+    monospace;
+  overflow-wrap: anywhere;
+}
+.scoring-math .math-indent {
+  padding-left: 5.2ch;
+}
+.scoring-math > div + div {
+  margin-top: 3px;
 }
 .place-search.bold-value .search-input input {
   font-weight: 700;
