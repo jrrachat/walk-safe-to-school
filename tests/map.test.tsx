@@ -12,7 +12,11 @@ import { demoGraph, places } from "../shared/demo";
 const mock = vi.hoisted(() => ({
   handlers: new Map<string, (event?: unknown) => void>(),
   sources: new Map<string, { setData: ReturnType<typeof vi.fn> }>(),
-  layers: [] as { id: string; filter?: unknown }[],
+  layers: [] as {
+    id: string;
+    filter?: unknown;
+    paint?: Record<string, unknown>;
+  }[],
   fit: vi.fn(),
   zoom: 14.7,
 }));
@@ -119,6 +123,9 @@ it("draws the selected route when the style is ready, without waiting for tiles"
     true,
   ]);
   expect(
+    mock.layers.find((l) => l.id === "route-selected")?.paint?.["line-color"],
+  ).toBe("#145cdb");
+  expect(
     document.querySelector(".origin .place-marker-label")?.textContent,
   ).toBe("Midtown MARTA");
   expect(document.querySelector(".destination")).toBeNull();
@@ -202,7 +209,7 @@ it("draws a short warning strip perpendicular to the walking route", () => {
   );
   expect(strip).toHaveLength(2);
   expect(strip[0][0]).toBeCloseTo(strip[1][0], 7);
-  expect(distance(strip[0], strip[1])).toBeCloseTo(14, 0);
+  expect(distance(strip[0], strip[1])).toBeCloseTo(40, 0);
 });
 
 it("draws sidewalk stretches and points speed warnings at the road", () => {
@@ -224,6 +231,7 @@ it("draws sidewalk stretches and points speed warnings at the road", () => {
         coordinate: routes[1].coordinates[2],
         signalized: false,
         marked: false,
+        likely: true,
       },
     ],
     violations: [
@@ -256,6 +264,12 @@ it("draws sidewalk stretches and points speed warnings at the road", () => {
       },
     ],
   };
+  route.alerts![1].roadName = "Example Street";
+  route.alerts!.push({
+    ...route.alerts![1],
+    coordinate: routes[1].coordinates[0],
+    geometry: routes[1].coordinates.slice(0, 2),
+  });
   render(
     <MapView
       routes={[route]}
@@ -272,8 +286,20 @@ it("draws sidewalk stretches and points speed warnings at the road", () => {
   expect(mock.layers.map((layer) => layer.id)).toContain(
     "suspected-unmarked-crossings",
   );
+  expect(
+    mock.layers.find((layer) => layer.id === "suspected-unmarked-crossings")
+      ?.paint?.["line-width"],
+  ).toBe(10);
   expect(document.querySelectorAll(".crossing-marker")).toHaveLength(1);
-  expect(document.querySelector(".crosswalk-warning")).toBeNull();
+  const crossingWarning = document.querySelector<HTMLElement>(
+    ".crossing-warning-marker",
+  );
+  expect(crossingWarning?.classList.contains("likely")).toBe(true);
+  expect(crossingWarning?.getAttribute("aria-label")).toContain(
+    "Likely crossing",
+  );
+  fireEvent.click(crossingWarning!);
+  expect(crossingWarning?.getAttribute("aria-expanded")).toBe("true");
   expect(document.querySelector(".speed-warning-road")?.textContent).toBe(
     "Monroe Drive",
   );
@@ -281,10 +307,14 @@ it("draws sidewalk stretches and points speed warnings at the road", () => {
     "40 mph",
   );
   const walkingMarker = document.querySelector<HTMLElement>(".crossing-marker");
-  expect(walkingMarker?.textContent).toBe("");
+  expect(walkingMarker?.querySelector(".crossing-marker-tooltip")?.textContent).toBe(
+    "Mapped signalized crosswalk",
+  );
   expect(walkingMarker?.querySelector("svg")).not.toBeNull();
+  fireEvent.click(walkingMarker!);
+  expect(walkingMarker?.getAttribute("aria-expanded")).toBe("true");
   expect(walkingMarker?.getAttribute("aria-label")).toContain(
-    "Crossing symbol (crossing lights)",
+    "Mapped signalized crosswalk",
   );
   expect(
     Number.parseInt(
@@ -293,7 +323,16 @@ it("draws sidewalk stretches and points speed warnings at the road", () => {
         .replace("px", "") || "22",
     ),
   ).toBeLessThanOrEqual(22);
-  expect(document.querySelector(".sidewalk-warning")?.textContent).toContain(
-    "No sidewalk ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Example Street",
-  );
+  const sidewalkPin = document.querySelector<HTMLElement>(".sidewalk-warning");
+  expect(
+    sidewalkPin?.querySelector(".sidewalk-warning-icon")?.textContent,
+  ).toBe("S");
+  expect(sidewalkPin?.getAttribute("aria-expanded")).toBe("false");
+  expect(sidewalkPin?.getAttribute("aria-label")).toContain("Example Street");
+  fireEvent.click(sidewalkPin!);
+  expect(sidewalkPin?.getAttribute("aria-expanded")).toBe("true");
+  expect(
+    sidewalkPin?.querySelector(".sidewalk-warning-detail")?.textContent,
+  ).toBe("Sidewalk gap · Example Street");
+  expect(document.querySelectorAll(".sidewalk-warning")).toHaveLength(1);
 });

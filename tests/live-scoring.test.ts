@@ -293,8 +293,9 @@ describe("live route attribute scoring", () => {
     );
     expect(unsafeCrossing.checks.speed.passes).toBe(false);
     expect(unsafeCrossing.checks.sidewalks.passes).toBe(false);
-    expect(unsafeCrossing.checks.crosswalks.passes).toBe(true);
+    expect(unsafeCrossing.checks.crosswalks.passes).toBe(false);
     expect(unsafeCrossing.crossings).toHaveLength(1);
+    expect(unsafeCrossing.crossings[0].marked).toBeUndefined();
   });
 
   it("reports the road name and mph for roads over 35 mph", () => {
@@ -345,7 +346,7 @@ describe("live route attribute scoring", () => {
     expect(result.alerts).toMatchObject([
       {
         requirement: "sidewalks",
-        label: "No sidewalk — Example Street",
+        label: "Mapped sidewalk gap — Example Street",
         geometry: [
           [-84.39, 33.77],
           [-84.389, 33.77],
@@ -407,6 +408,103 @@ describe("live route attribute scoring", () => {
     expect(edges[0].separate_sidewalk_coverage).toBe(1);
     expect(result.checks.sidewalks.passes).toBe(true);
     expect(result.features.sidewalk).toBe(0);
+  });
+
+  it("credits only the part of a long street segment with a sidewalk", () => {
+    const coordinates: Coordinate[] = [
+      [-84.39, 33.77],
+      [-84.388, 33.77],
+    ];
+    const edges = addSeparateSidewalkEvidence(
+      [
+        {
+          length: 0.185,
+          use: "road",
+          begin_shape_index: 0,
+          end_shape_index: 1,
+        },
+      ],
+      coordinates,
+      [
+        {
+          explicit: true,
+          coordinates: [
+            [-84.389, 33.77005],
+            [-84.388, 33.77005],
+          ],
+        },
+      ],
+    );
+    const result = auditRouteAttributes(edges, coordinates);
+    expect(edges[0].separate_sidewalk_coverage).toBeCloseTo(0.5, 3);
+    expect(edges[0].separate_sidewalk_gap_geometries).toEqual([
+      [
+        [-84.39, 33.77],
+        [-84.389, 33.77],
+      ],
+    ]);
+    expect(result.checks.sidewalks.passes).toBe(false);
+    expect(result.violationDetails.sidewalks?.[0].geometry).toEqual(
+      edges[0].separate_sidewalk_gap_geometries?.[0],
+    );
+  });
+
+  it("does not credit a sidewalk beyond the route segment", () => {
+    const coordinates: Coordinate[] = [
+      [-84.39, 33.77],
+      [-84.389, 33.77],
+    ];
+    const edges = addSeparateSidewalkEvidence(
+      [
+        {
+          length: 0.093,
+          use: "road",
+          begin_shape_index: 0,
+          end_shape_index: 1,
+        },
+      ],
+      coordinates,
+      [
+        {
+          explicit: true,
+          coordinates: [
+            [-84.3889, 33.77005],
+            [-84.388, 33.77005],
+          ],
+        },
+      ],
+    );
+    expect(edges[0].separate_sidewalk_coverage).toBe(0);
+  });
+
+  it("joins adjacent sidewalk pieces without inventing a gap", () => {
+    const coordinates: Coordinate[] = [
+      [-84.39, 33.77],
+      [-84.388, 33.77],
+    ];
+    const edges = addSeparateSidewalkEvidence(
+      [
+        {
+          length: 0.185,
+          use: "road",
+          begin_shape_index: 0,
+          end_shape_index: 1,
+        },
+      ],
+      coordinates,
+      [
+        {
+          explicit: true,
+          coordinates: [
+            [-84.39, 33.77005],
+            [-84.389, 33.77005],
+            [-84.388, 33.77005],
+          ],
+        },
+      ],
+    );
+    expect(edges[0].separate_sidewalk_coverage).toBeCloseTo(1);
+    expect(edges[0].separate_sidewalk_gaps).toEqual([]);
   });
 
   it("does not count a perpendicular path as a sidewalk", () => {
@@ -529,6 +627,37 @@ describe("live route attribute scoring", () => {
       [coordinates[1], destination],
     );
     expect(sameEdgeAwayFromSchool.checks.sidewalks.passes).toBe(false);
+  });
+
+  it("keeps gap geometry and uncovered length aligned after the school block exemption", () => {
+    const destination: Coordinate = [-84.388, 33.77];
+    const farGap: Coordinate = [-84.391, 33.77];
+    const nearGap: Coordinate = [-84.3885, 33.77];
+    const farGeometry: Coordinate[] = [
+      [-84.392, 33.77],
+      [-84.39, 33.77],
+    ];
+    const nearGeometry: Coordinate[] = [
+      [-84.3886, 33.77],
+      [-84.3884, 33.77],
+    ];
+    const edges = [
+      {
+        length: 0.4,
+        use: "road",
+        separate_sidewalk_coverage: 0,
+        separate_sidewalk_gaps: [farGap, nearGap],
+        separate_sidewalk_gap_geometries: [farGeometry, nearGeometry],
+      },
+    ];
+    const adjusted = applySchoolBlockSidewalkExemption(
+      edges,
+      [[-84.392, 33.77], destination],
+      destination,
+    );
+    expect(adjusted[0].separate_sidewalk_gaps).toEqual([farGap]);
+    expect(adjusted[0].separate_sidewalk_gap_geometries).toEqual([farGeometry]);
+    expect(adjusted[0].separate_sidewalk_coverage).toBeCloseTo(1 / 11, 2);
   });
 
   it("ignores every warning on the destination school's block", () => {
@@ -717,10 +846,10 @@ describe("live route attribute scoring", () => {
     ]);
   });
   it("bounds and spaces the wider crossing search for long routes", () => {
-    const gaps = Array.from(
-      { length: 80 },
-      (_, index): Coordinate => [-84.45 + index * 0.0002, 33.66],
-    );
+    const gaps = Array.from({ length: 80 }, (_, index): Coordinate => [
+      -84.45 + index * 0.0002,
+      33.66,
+    ]);
     const points = crossingAlternativeSearchPoints(gaps);
     expect(points).toHaveLength(4);
     expect(points[0]).toEqual(gaps[0]);
@@ -728,8 +857,7 @@ describe("live route attribute scoring", () => {
     expect(
       points.every(
         (point, index) =>
-          index === 0 ||
-          Math.abs(point[0] - points[index - 1][0]) >= 0.001,
+          index === 0 || Math.abs(point[0] - points[index - 1][0]) >= 0.001,
       ),
     ).toBe(true);
   });
@@ -784,13 +912,13 @@ describe("live route attribute scoring", () => {
     ]);
   });
 
-  it("accepts every mapped crosswalk color/type unless explicitly unmarked", () => {
+  it("confirms marked crossings from their markings or signal tags", () => {
     const crossings = parseMappedCrossings([
       {
         type: "node",
         lat: 33.77,
         lon: -84.39,
-        tags: { highway: "crossing" },
+        tags: { highway: "crossing", crossing: "marked" },
       },
       {
         type: "way",
@@ -799,7 +927,11 @@ describe("live route attribute scoring", () => {
           { lat: 33.77, lon: -84.389 },
           { lat: 33.7701, lon: -84.389 },
         ],
-        tags: { highway: "footway", footway: "crossing" },
+        tags: {
+          highway: "footway",
+          footway: "crossing",
+          crossing: "uncontrolled",
+        },
       },
       {
         type: "way",
@@ -818,10 +950,13 @@ describe("live route attribute scoring", () => {
     ]);
     expect(crossings).toMatchObject([
       { marked: true },
-      { coordinate: [-84.389, 33.77], marked: true },
       { marked: true },
+      { marked: undefined },
       { marked: false },
     ]);
+    expect(crossings[1].coordinate[0]).toBeCloseTo(-84.389, 6);
+    expect(crossings[1].coordinate[1]).toBeCloseTo(33.77, 6);
+    expect(crossings[2].coordinate[0]).toBeCloseTo(-84.38805, 6);
   });
   it("marks every duplicate route crossing in the same mapped crossing cluster", () => {
     const route = [
@@ -938,6 +1073,28 @@ describe("live route attribute scoring", () => {
     );
     expect(crossings).toMatchObject([{ marked: true }]);
   });
+  it("matches a crosswalk line that crosses the route between its endpoints", () => {
+    const route: Coordinate[] = [
+      [-84.37, 33.77],
+      [-84.368, 33.77],
+    ];
+    const mapped = parseMappedCrossings([
+      {
+        type: "way",
+        geometry: [
+          { lon: -84.369, lat: 33.7702 },
+          { lon: -84.369, lat: 33.7698 },
+        ],
+        tags: { highway: "footway", footway: "crossing", crossing: "marked" },
+      },
+    ]);
+    const merged = mergeMappedCrossings(
+      [{ coordinate: [-84.369, 33.77], marked: false, signalized: false }],
+      mapped,
+      route,
+    );
+    expect(merged).toMatchObject([{ marked: true }]);
+  });
   it("only adds mapped crossing markers that lie on the selected route", () => {
     const route: Coordinate[] = [
       [-84.39, 33.77],
@@ -964,7 +1121,7 @@ describe("live route attribute scoring", () => {
     expect(merged[0].coordinate[1]).toBeCloseTo(33.77, 7);
   });
 
-  it("detects an unmarked roadway crossing between pedestrian paths", () => {
+  it("recognizes a likely crossing between pedestrian paths without claiming markings", () => {
     const coordinates: Coordinate[] = [
       [-84.39, 33.77],
       [-84.3898, 33.77],
@@ -991,8 +1148,64 @@ describe("live route attribute scoring", () => {
     );
     expect(result.checks.crosswalks.passes).toBe(false);
     expect(result.crossings).toMatchObject([
-      { marked: false, signalized: false },
+      { likely: true, signalized: false },
     ]);
+    expect(result.crossings[0].marked).toBeUndefined();
+    expect(result.violationDetails.crosswalks?.[0].label).toContain(
+      "Likely crossing",
+    );
     expect(result.violations.crosswalks).toHaveLength(1);
+  });
+
+  it("ignores the reported non-road crossing on the Noble Drive route", () => {
+    const result = auditRouteAttributes(
+      [
+        { length: 0.01, use: "footway", begin_shape_index: 0 },
+        { length: 0.008, use: "pedestrian_crossing", begin_shape_index: 1 },
+        { length: 0.008, use: "pedestrian_crossing", begin_shape_index: 2 },
+        { length: 0.01, use: "footway", begin_shape_index: 3 },
+      ],
+      [
+        [-84.3589, 33.7953],
+        [-84.35885, 33.7953],
+        [-84.3588, 33.7953],
+        [-84.35875, 33.7953],
+      ],
+    );
+    expect(result.crossings).toHaveLength(0);
+    expect(result.checks.crosswalks.applicable).toBe(false);
+    expect(result.violations.crosswalks).toEqual([]);
+  });
+
+  it("keeps crossing tags outside the reported non-road spot", () => {
+    const result = auditRouteAttributes(
+      [
+        { length: 0.02, use: "road", begin_shape_index: 0 },
+        { length: 0.008, use: "pedestrian_crossing", begin_shape_index: 1 },
+        { length: 0.008, use: "pedestrian_crossing", begin_shape_index: 2 },
+        { length: 0.01, use: "footway", begin_shape_index: 3 },
+      ],
+      [
+        [-84.35, 33.78],
+        [-84.34995, 33.78],
+        [-84.3499, 33.78],
+        [-84.34985, 33.78],
+      ],
+    );
+    expect(result.crossings).toHaveLength(2);
+    expect(result.violations.crosswalks).toHaveLength(2);
+  });
+
+  it("does not re-add the reported non-road spot from mapped crossing data", () => {
+    const point: Coordinate = [-84.35884, 33.79524];
+    const merged = mergeMappedCrossings(
+      [],
+      [{ coordinate: point, marked: true, signalized: false }],
+      [
+        [-84.3589, 33.79524],
+        [-84.3588, 33.79524],
+      ],
+    );
+    expect(merged).toEqual([]);
   });
 });

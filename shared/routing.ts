@@ -26,6 +26,7 @@ export type RouteCrossing = {
   coordinate: Coordinate;
   signalized: boolean;
   marked?: boolean;
+  likely?: boolean;
 };
 export type RouteViolation = {
   coordinate: Coordinate;
@@ -52,8 +53,8 @@ export const requirementLabels: Record<RequirementKey, string> = {
 };
 export const requirementFailureLabels: Record<RequirementKey, string> = {
   speed: "Over 35 mph",
-  crosswalks: "Crosswalk missing",
-  sidewalks: "Sidewalk missing",
+  crosswalks: "Crosswalk not verified",
+  sidewalks: "Mapped sidewalk gap",
 };
 export const requirementDescriptions: Record<RequirementKey, string> = {
   speed: "Every known mapped speed limit is 35 mph or less.",
@@ -136,7 +137,10 @@ export function displayCrossings(
     );
     if (existing) {
       existing.signalized ||= crossing.signalized;
-      existing.marked ||= crossing.marked;
+      existing.likely ||= crossing.likely;
+      if (crossing.marked === true) existing.marked = true;
+      else if (crossing.marked === false && existing.marked === undefined)
+        existing.marked = false;
     } else visible.push({ ...crossing });
     return visible;
   }, []);
@@ -161,14 +165,52 @@ export function validateGraph(input: unknown): Graph {
   return g;
 }
 export function nearestNode(graph: Graph, coordinate: Coordinate) {
-  const sorted = graph.nodes
-    .map((n) => ({ node: n, meters: distance(coordinate, n.coordinate) }))
-    .sort((a, b) => a.meters - b.meters);
-  if (!sorted[0] || sorted[0].meters > 250)
+  let nearest: { id: string; meters: number } | undefined;
+  for (const node of graph.nodes) {
+    const meters = distance(coordinate, node.coordinate);
+    if (!nearest || meters < nearest.meters) nearest = { id: node.id, meters };
+  }
+  if (!nearest || nearest.meters > 250)
     throw new Error(
       "This point is outside the available pedestrian graph. Try a Midtown sample place. Atlanta-wide routing needs the production street graph.",
     );
-  return sorted[0].node.id;
+  return nearest.id;
+}
+
+type QueueItem = { id: string; cost: number };
+class MinQueue {
+  private items: QueueItem[] = [];
+
+  push(item: QueueItem) {
+    const items = this.items;
+    let index = items.length;
+    items.push(item);
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      if (items[parent].cost <= item.cost) break;
+      items[index] = items[parent];
+      index = parent;
+    }
+    items[index] = item;
+  }
+
+  pop(): QueueItem | undefined {
+    const items = this.items;
+    const first = items[0];
+    const last = items.pop();
+    if (!items.length || !last) return first;
+    let index = 0;
+    while (index * 2 + 1 < items.length) {
+      let child = index * 2 + 1;
+      if (child + 1 < items.length && items[child + 1].cost < items[child].cost)
+        child++;
+      if (last.cost <= items[child].cost) break;
+      items[index] = items[child];
+      index = child;
+    }
+    items[index] = last;
+    return first;
+  }
 }
 export function findRoute(
   graph: Graph,
@@ -189,34 +231,27 @@ export function findRoute(
     { to: string; edge: Edge; reverse: boolean }[]
   >();
   for (const e of graph.edges) {
-    adjacency.set(e.from, [
-      ...(adjacency.get(e.from) || []),
-      { to: e.to, edge: e, reverse: false },
-    ]);
-    if (e.bidirectional)
-      adjacency.set(e.to, [
-        ...(adjacency.get(e.to) || []),
-        { to: e.from, edge: e, reverse: true },
-      ]);
+    if (!adjacency.has(e.from)) adjacency.set(e.from, []);
+    adjacency.get(e.from)!.push({ to: e.to, edge: e, reverse: false });
+    if (e.bidirectional) {
+      if (!adjacency.has(e.to)) adjacency.set(e.to, []);
+      adjacency.get(e.to)!.push({ to: e.from, edge: e, reverse: true });
+    }
   }
   const costs = new Map<string, number>([[start, 0]]),
     previous = new Map<
       string,
       { from: string; edge: Edge; reverse: boolean }
-    >(),
-    visited = new Set<string>();
+    >();
+  const queue = new MinQueue();
+  queue.push({ id: start, cost: 0 });
   // Dijkstra: all costs are positive; no heuristic assumptions about imported geometry.
   while (true) {
-    let current: string | undefined,
-      best = Infinity;
-    for (const [id, cost] of costs)
-      if (!visited.has(id) && cost < best) {
-        current = id;
-        best = cost;
-      }
-    if (current === undefined) break;
+    const item = queue.pop();
+    if (!item) break;
+    const { id: current, cost: best } = item;
+    if (best !== costs.get(current)) continue;
     if (current === end) break;
-    visited.add(current);
     for (const next of adjacency.get(current) || []) {
       const cost =
         best +
@@ -229,6 +264,7 @@ export function findRoute(
           edge: next.edge,
           reverse: next.reverse,
         });
+        queue.push({ id: next.to, cost });
       }
     }
   }
@@ -239,7 +275,7 @@ export function findRoute(
   let cursor = end;
   while (cursor !== start) {
     const p = previous.get(cursor)!;
-    edges.unshift(
+    edges.push(
       p.reverse
         ? {
             ...p.edge,
@@ -250,8 +286,10 @@ export function findRoute(
         : p.edge,
     );
     cursor = p.from;
-    nodes.unshift(cursor);
+    nodes.push(cursor);
   }
+  edges.reverse();
+  nodes.reverse();
   const meters = edges.reduce((s, e) => s + e.meters, 0),
     breakdown = Object.fromEntries(
       factors.map((k) => [

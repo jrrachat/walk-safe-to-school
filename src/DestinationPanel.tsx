@@ -1,5 +1,5 @@
 import { Check, Download, Footprints, Home } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import type { Place } from "../shared/demo";
 import {
   displayCrossings,
@@ -30,8 +30,6 @@ type Props = {
   onExport: (format: ExportFormat) => void;
   error: string;
   home?: PlannerSaved;
-  walking: boolean;
-  tripContent: ReactNode;
   onStart: (place: Place) => void;
   onDestination: (place: Place) => void;
   onLocate: () => void;
@@ -47,9 +45,9 @@ export default function DestinationPanel(p: Props) {
   const crossings = displayCrossings(selected?.crossings || []);
   const hasUnmetRequirements = Boolean(
     selected &&
-      requirementKeys.some(
-        (key) => p.requirements[key] && !selected.checks?.[key].passes,
-      ),
+    requirementKeys.some(
+      (key) => p.requirements[key] && !selected.checks?.[key].passes,
+    ),
   );
 
   return (
@@ -66,14 +64,14 @@ export default function DestinationPanel(p: Props) {
           onOpenChange={setFindingStart}
           onChoose={p.onStart}
           onLocate={p.onLocate}
-          disabled={p.walking}
+          disabled={p.exporting}
         />
         {!findingStart && (
           <PlaceSearch
             label="Destination school"
             value={p.hasDestination ? p.end : null}
             onChoose={p.onDestination}
-            disabled={p.walking}
+            disabled={p.exporting}
             prominent
           />
         )}
@@ -81,7 +79,7 @@ export default function DestinationPanel(p: Props) {
 
       <button
         className="home-link"
-        disabled={p.walking}
+        disabled={p.exporting}
         onClick={
           p.home ? () => p.onStart({ ...p.home!, name: "Home" }) : p.onHome
         }
@@ -97,7 +95,7 @@ export default function DestinationPanel(p: Props) {
           </div>
           {p.loading && (
             <p role="status" className="loading-routes">
-              Finding the safest walking route...
+              Checking walking routes...
             </p>
           )}
           {p.error && (
@@ -112,7 +110,7 @@ export default function DestinationPanel(p: Props) {
                   <strong>
                     {hasUnmetRequirements
                       ? "Best available route"
-                      : "Safest route"}
+                      : "Recommended route"}
                   </strong>
                   <span className="route-radio">
                     <Check size={12} />
@@ -120,8 +118,8 @@ export default function DestinationPanel(p: Props) {
                 </div>
                 {hasUnmetRequirements && (
                   <small>
-                    Review the red map warnings where a checked preference
-                    could not be confirmed.
+                    Review the map warnings where a checked preference could not
+                    be confirmed.
                   </small>
                 )}
                 <div
@@ -158,6 +156,84 @@ export default function DestinationPanel(p: Props) {
             </div>
           )}
 
+          {selected && !p.error && (
+            <details className="map-key" open>
+              <summary>How to read the map</summary>
+              <p className="map-key-intro">
+                Follow the blue line. Colored marks show places to check along
+                the walk.
+              </p>
+              <div className="map-key-items">
+                <div>
+                  <span className="map-key-line route" aria-hidden="true" />
+                  <span>
+                    <strong>Blue line</strong>
+                    <small>Your walking route</small>
+                  </span>
+                </div>
+                <div>
+                  <span className="map-key-line sidewalk" aria-hidden="true" />
+                  <span>
+                    <strong>Orange dashes</strong>
+                    <small>Sidewalk not mapped here</small>
+                  </span>
+                </div>
+                <div>
+                  <span className="map-key-alert sidewalk" aria-hidden="true">
+                    S
+                  </span>
+                  <span>
+                    <strong>Orange S</strong>
+                    <small>Tap for sidewalk details</small>
+                  </span>
+                </div>
+                <div>
+                  <span className="map-key-walking marked" aria-hidden="true">
+                    <Footprints aria-hidden="true" strokeWidth={2.4} />
+                  </span>
+                  <span>
+                    <strong>Blue footprints</strong>
+                    <small>Mapped crosswalk</small>
+                  </span>
+                </div>
+                <div>
+                  <span
+                    className="map-key-walking signalized"
+                    aria-hidden="true"
+                  >
+                    <Footprints aria-hidden="true" strokeWidth={2.4} />
+                  </span>
+                  <span>
+                    <strong>Green footprints</strong>
+                    <small>Mapped signalized crosswalk</small>
+                  </span>
+                </div>
+                <div>
+                  <span className="map-key-alert likely" aria-hidden="true">
+                    !
+                  </span>
+                  <span>
+                    <strong>Orange warning</strong>
+                    <small>Likely crossing; markings not verified</small>
+                  </span>
+                </div>
+                <div>
+                  <span className="map-key-alert" aria-hidden="true">
+                    !
+                  </span>
+                  <span>
+                    <strong>Red warning</strong>
+                    <small>Crosswalk not verified</small>
+                  </span>
+                </div>
+              </div>
+              <p className="map-key-note">
+                Short red or orange bars across the route mark those same
+                crossing warnings. Tap a warning for details. Street colors are
+                background only.
+              </p>
+            </details>
+          )}
           <section className="route-factors" aria-label="Route factors">
             <div className="route-factors-heading">
               <h3>Route factors</h3>
@@ -166,7 +242,7 @@ export default function DestinationPanel(p: Props) {
               <label className="factor-check">
                 <input
                   type="checkbox"
-                  disabled={p.walking}
+                  disabled={p.exporting}
                   checked={p.avoidBusyRoads}
                   onChange={(event) => p.onAvoidBusyRoads(event.target.checked)}
                 />
@@ -178,7 +254,7 @@ export default function DestinationPanel(p: Props) {
                 <label className="factor-check" key={key}>
                   <input
                     type="checkbox"
-                    disabled={p.walking}
+                    disabled={p.exporting}
                     checked={p.requirements[key]}
                     onChange={(event) =>
                       p.onRequirements({
@@ -194,64 +270,6 @@ export default function DestinationPanel(p: Props) {
               ))}
             </div>
           </section>
-
-          {selected && !p.error && (
-            <details className="map-key" open>
-              <summary>Map key</summary>
-              <div className="map-key-items">
-                <span>
-                  <img
-                    src="/map-key/route.png"
-                    alt=""
-                    className="map-key-image"
-                  />
-                  Route (blue)
-                </span>
-                <span>
-                  <img
-                    src="/map-key/sidewalk.png"
-                    alt=""
-                    className="map-key-image"
-                  />
-                  Mapped walking path (colors vary)
-                </span>
-                <span>
-                  <img
-                    src="/map-key/local.png"
-                    alt=""
-                    className="map-key-image"
-                  />
-                  Less busy road (white)
-                </span>
-                <span>
-                  <img
-                    src="/map-key/busy.png"
-                    alt=""
-                    className="map-key-image"
-                  />
-                  Busier road (yellow)
-                </span>
-                <span>
-                  <span className="map-key-walking marked">
-                    <Footprints aria-hidden="true" strokeWidth={2.4} />
-                  </span>
-                  Crossing symbol
-                </span>
-                <span>
-                  <span className="map-key-walking signalized">
-                    <Footprints aria-hidden="true" strokeWidth={2.4} />
-                  </span>
-                  Crossing symbol (crossing lights)
-                </span>
-                <span>
-                  <span className="map-key-warning-strip" aria-hidden="true" />
-                  Suspected no crossing markings
-                </span>
-              </div>
-            </details>
-          )}
-
-          {p.tripContent}
         </>
       )}
     </>

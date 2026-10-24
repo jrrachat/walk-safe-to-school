@@ -44,36 +44,38 @@ export async function renderRouteCard(
     width: container.style.width,
     height: container.style.height,
   };
+  const previousExportState = container.dataset.routeExport;
   const bounds = new LngLatBounds();
   route.coordinates.forEach((coordinate) => bounds.extend(coordinate));
   const width = 1600,
     header = 200,
     footer = 60;
   try {
+    container.dataset.routeExport = "true";
     container.style.width = "1200px";
     container.style.height = "850px";
     map.resize();
-    await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve) => {
+      let paintTimer: number | undefined;
       const done = () => {
         cleanup();
         resolve();
       };
-      const failed = () => {
-        cleanup();
-        reject(
-          new Error(
-            "The map could not finish loading. Check your connection and try again.",
-          ),
-        );
-      };
-      const timeout = window.setTimeout(failed, 20000);
+      // A tile provider can fail while the route layer still renders. Capture
+      // the route after a paint, with a short upper bound for offline maps.
+      const timeout = window.setTimeout(done, 3000);
       const cleanup = () => {
         clearTimeout(timeout);
+        clearTimeout(paintTimer);
         map.off("idle", done);
-        map.off("error", failed);
+        map.off("render", painted);
+      };
+      const painted = () => {
+        if (map.areTilesLoaded() && paintTimer === undefined)
+          paintTimer = window.setTimeout(done, 150);
       };
       map.on("idle", done);
-      map.on("error", failed);
+      map.on("render", painted);
       map.fitBounds(bounds, {
         padding: 60,
         bearing: 0,
@@ -95,6 +97,17 @@ export async function renderRouteCard(
     ctx.fillStyle = "white";
     ctx.fillRect(0, 0, width, canvas.height);
     ctx.drawImage(source, 0, header, width, height);
+    if (!map.areTilesLoaded()) {
+      ctx.fillStyle = "#fff3d6";
+      ctx.fillRect(30, header + 24, width - 60, 54);
+      ctx.fillStyle = "#713f0a";
+      ctx.font = "bold 24px Arial";
+      ctx.fillText(
+        "Street map unavailable — route line only. Do not navigate with this image.",
+        48,
+        header + 60,
+      );
+    }
     const scale = width / source.clientWidth;
     // HTML markers are outside the WebGL canvas; add clear endpoint labels.
     for (const [coordinate, label, color] of [
@@ -133,6 +146,19 @@ export async function renderRouteCard(
         " mi",
       48,
       147,
+    );
+    ctx.font = "bold 18px Arial";
+    ctx.fillStyle = route.violations?.length ? "#a34224" : "#2464d8";
+    ctx.fillText(
+      fitText(
+        ctx,
+        route.violations?.length
+          ? "WALKWISE ATLANTA · Review route warnings before walking"
+          : "WALKWISE ATLANTA",
+        1220,
+      ),
+      48,
+      181,
     );
     // Compass stays outside the map so it never covers a street or the route.
     ctx.save();
@@ -183,6 +209,8 @@ export async function renderRouteCard(
     container.style.height = originalSize.height;
     map.resize();
     map.jumpTo(camera);
+    if (previousExportState === undefined) delete container.dataset.routeExport;
+    else container.dataset.routeExport = previousExportState;
   }
 }
 

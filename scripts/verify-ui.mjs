@@ -104,27 +104,20 @@ try {
     page.getByText("Required route factors", { exact: true }),
   ).toHaveCount(0);
   await page
-    .getByRole("button", { name: "Data and API documentation", exact: true })
+    .getByRole("button", { name: "About routes and data", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Data & APIs" }),
+    page.getByRole("heading", { name: "About the routes" }),
   ).toBeVisible();
-  await expect(page.locator(".docs-disclosure")).toHaveCount(3);
-  await page.getByText("Routing algorithm", { exact: true }).first().click();
-  await expect(page.locator(".api-row")).toHaveCount(12);
-  await expect(
-    page.getByRole("heading", { name: "Routing algorithm" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Bidirectional A* with traffic and road-class exposure"),
-  ).toBeVisible();
-  await expect(page.locator(".algorithm-formula")).toContainText(
-    "R = 100 \u00d7 (9M + 7C + 6V + wT) / (22 + w)",
+  await expect(page.locator(".docs-disclosure")).toHaveCount(2);
+  await expect(page.locator(".docs-summary")).toContainText(
+    "Walkwise compares walking routes",
   );
-  const docsHeadings = await page.locator(".docs-page h2").allTextContents();
-  expect(docsHeadings.indexOf("Routing algorithm")).toBeLessThan(
-    docsHeadings.indexOf("External data"),
-  );
+  await page.getByText("Data sources", { exact: true }).click();
+  await expect(page.locator(".source-list li")).toHaveCount(5);
+  await expect(page.locator(".source-list a")).toHaveCount(9);
+  await page.getByText("Scoring details", { exact: true }).click();
+  await expect(page.locator(".scoring-note")).toContainText("lower is better");
   await page.getByRole("button", { name: "Back to map", exact: true }).click();
   await page.getByRole("button", { name: "Set home" }).click();
   await page.getByRole("textbox", { name: "Home address" }).fill("Georgia Aqu");
@@ -219,7 +212,9 @@ try {
   await speedFactor.uncheck();
   await crosswalkFactor.uncheck();
   await sidewalkFactor.uncheck();
-  await expect(page.getByText("Safest route", { exact: true })).toBeVisible({
+  await expect(
+    page.getByText("Recommended route", { exact: true }),
+  ).toBeVisible({
     timeout: 75000,
   });
   await expect(page.locator(".route-card")).toHaveCount(1);
@@ -278,17 +273,16 @@ try {
   await sidewalkFactor.uncheck();
   await expect(sidewalkFactor).not.toBeChecked();
   await expect(page.locator(".route-card")).toHaveCount(1, { timeout: 30000 });
-  const controlledCrossing = page.locator(".crossing-marker.signalized");
-  await expect(controlledCrossing.first()).toBeVisible({ timeout: 15000 });
+  const confirmedCrossings = page.locator(".crossing-marker");
   expect(
-    (await controlledCrossing.allTextContents()).every((label) => label === ""),
+    (await confirmedCrossings.allTextContents()).every((label) => label === ""),
   ).toBe(true);
   expect(
-    await controlledCrossing.evaluateAll((markers) =>
+    await confirmedCrossings.evaluateAll((markers) =>
       markers.every(
         (marker) =>
           marker.querySelector("svg") &&
-          marker.getAttribute("aria-label")?.startsWith("Crossing symbol"),
+          marker.getAttribute("aria-label")?.startsWith("Mapped "),
       ),
     ),
   ).toBe(true);
@@ -318,30 +312,35 @@ try {
     }
   }
   await expect(page.locator(".map-key")).toHaveAttribute("open", "");
-  await expect(page.getByText("Map key", { exact: true })).toBeVisible();
-  await expect(page.getByText("MapLibre key", { exact: true })).toHaveCount(0);
   await expect(
-    page.getByText("Busier road (yellow)", { exact: true }),
+    page.getByText("How to read the map", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Less busy road (white)", { exact: true }),
+    page.getByText("Your walking route", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Mapped walking path (colors vary)", { exact: true }),
+    page.getByText("Sidewalk not mapped here", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("Route (blue)", { exact: true })).toBeVisible();
-  await expect(page.locator(".map-key-image")).toHaveCount(4);
+  await expect(
+    page.getByText("Street colors are background only.", { exact: false }),
+  ).toBeVisible();
+  await expect(page.locator(".map-key-items > div")).toHaveCount(7);
   await expect(page.locator(".map-key-walking")).toHaveCount(2);
   await expect(
-    page.getByText("Crossing symbol", { exact: true }),
+    page.getByText("Mapped crosswalk", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Crossing symbol (crossing lights)", { exact: true }),
+    page.getByText("Mapped signalized crosswalk", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Suspected no crossing markings", { exact: true }),
+    page.getByText("Crosswalk not verified", { exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".map-key-warning-strip")).toHaveCount(1);
+  await expect(
+    page
+      .locator(".map-key")
+      .getByText("Likely crossing; markings not verified", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".map-key-alert")).toHaveCount(3);
   expect(
     await page.evaluate(() => {
       const factors = document.querySelector(".route-factors");
@@ -349,35 +348,40 @@ try {
       return Boolean(
         factors &&
         key &&
-        factors.compareDocumentPosition(key) & Node.DOCUMENT_POSITION_FOLLOWING,
+        key.compareDocumentPosition(factors) & Node.DOCUMENT_POSITION_FOLLOWING,
       );
     }),
   ).toBe(true);
-  expect(
-    await page
-      .locator(".map-key-image")
-      .evaluateAll((images) =>
-        images.every(
-          (image) =>
-            image instanceof HTMLImageElement &&
-            image.complete &&
-            image.naturalWidth > 0,
-        ),
-      ),
-  ).toBe(true);
+  const otherSchools = page.locator(
+    ".place-marker.poi:not(.destination-school)",
+  );
+  const visibleSchoolIndex = await otherSchools.evaluateAll((markers) => {
+    const map = document.querySelector(".map")?.getBoundingClientRect();
+    if (!map) return -1;
+    return markers.findIndex((marker) => {
+      const box = marker.getBoundingClientRect();
+      return (
+        box.left >= map.left + 20 &&
+        box.right <= map.right - 20 &&
+        box.top >= map.top + 20 &&
+        box.bottom <= map.bottom - 20
+      );
+    });
+  });
+  expect(visibleSchoolIndex).toBeGreaterThanOrEqual(0);
+  const otherSchool = otherSchools.nth(visibleSchoolIndex);
+  await otherSchool.hover({ force: true });
+  await expect(otherSchool.locator(".place-marker-label")).toHaveCSS(
+    "white-space",
+    "normal",
+  );
   await expect.poll(routePixels, { timeout: 15000 }).toBeGreaterThan(1500);
   await page.screenshot({ path: ".qa/desktop-route.png" });
   await page.locator(".destination-school.place-marker").click();
-  await expect(page.locator(".place-popup")).toBeVisible();
+  await expect(page.locator(".place-popup")).toHaveCount(0);
   await expect(
-    page.locator(".place-popup").getByRole("button", { name: "Save School" }),
-  ).toHaveCount(0);
-  await expect(
-    page
-      .locator(".place-popup")
-      .getByRole("button", { name: "Get Directions" }),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
+    page.getByRole("textbox", { name: "Destination school", exact: true }),
+  ).toHaveValue(/Midtown/);
   await page
     .getByRole("textbox", { name: "Destination school", exact: true })
     .fill("Midtown");
@@ -449,7 +453,7 @@ try {
         "single-screen route information",
         "live school directory",
         "automatic destination-school search",
-        "algorithm and variables at top of Docs",
+        "concise route explanation and source links",
         "GDOT AADT traffic risk",
         "any-address start",
         "automatic starting-place suggestions",
@@ -464,9 +468,8 @@ try {
         "API documentation page",
         "desktop map width",
         "rendered route pixels",
-        "normal and light-controlled crossing symbols",
-        "map popup",
-        "school popup directions",
+        "confirmed crossing symbols",
+        "school marker selects destination without popup",
         "phone route pixels",
         "visible route cards",
         "drag down/up",

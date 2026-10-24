@@ -87,6 +87,7 @@ function setup(complete = true) {
       },
     }),
     getCanvas: () => source,
+    areTilesLoaded: () => complete,
     project: () => ({ x: 100, y: 100 }),
     resize: vi.fn(),
     fitBounds: vi.fn(),
@@ -127,20 +128,20 @@ it("exports the full route north-up and restores a rotated phone map", async () 
   expect(container.style.height).toBe("");
   expect(handlers.size).toBe(0);
 });
-it("restores the map and removes listeners when tiles time out", async () => {
+it("exports a clearly warned route-only image when tiles time out", async () => {
   vi.useFakeTimers();
-  const { map, camera, container, handlers } = setup(false);
+  const { map, camera, container, handlers, ctx } = setup(false);
   const promise = renderRouteCard(
     map as unknown as RouteMap,
     route,
     start,
     end,
   );
-  const rejection = expect(promise).rejects.toThrow(
-    "map could not finish loading",
+  await vi.advanceTimersByTimeAsync(3000);
+  await promise;
+  expect(ctx.fillText.mock.calls.map((call) => call[0])).toContain(
+    "Street map unavailable — route line only. Do not navigate with this image.",
   );
-  await vi.advanceTimersByTimeAsync(20000);
-  await rejection;
   expect(map.jumpTo).toHaveBeenLastCalledWith(camera);
   expect(container.style.width).toBe("390px");
   expect(handlers.size).toBe(0);

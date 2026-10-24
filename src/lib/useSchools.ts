@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { Place } from "../../shared/demo";
-import { schools as fallbackSchools } from "../../shared/schools";
 
 let cached: Place[] | null = null;
 let pending: Promise<Place[]> | null = null;
@@ -11,8 +10,13 @@ export function loadAtlantaSchools() {
     pending = fetch("/api/schools")
       .then(async (response) => {
         if (!response.ok) throw new Error("School directory unavailable");
-        const data = (await response.json()) as { places: Place[] };
-        cached = data.places.length ? data.places : fallbackSchools;
+        const data = (await response.json()) as {
+          places: Place[];
+          live: boolean;
+        };
+        if (!data.live || !data.places.length)
+          throw new Error("School directory unavailable");
+        cached = data.places;
         return cached;
       })
       .finally(() => {
@@ -22,14 +26,23 @@ export function loadAtlantaSchools() {
 }
 
 export function useSchools() {
-  const [schools, setSchools] = useState<Place[]>(cached || fallbackSchools);
+  const [schools, setSchools] = useState<Place[]>(cached || []);
   useEffect(() => {
     let active = true;
-    loadAtlantaSchools()
-      .then((places) => active && setSchools(places))
-      .catch(() => undefined);
+    let retry: number | undefined;
+    const refresh = () => {
+      loadAtlantaSchools()
+        .then((places) => {
+          if (active) setSchools(places);
+        })
+        .catch(() => {
+          if (active) retry = window.setTimeout(refresh, 15000);
+        });
+    };
+    refresh();
     return () => {
       active = false;
+      window.clearTimeout(retry);
     };
   }, []);
   return schools;

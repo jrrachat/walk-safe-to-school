@@ -1,8 +1,9 @@
-import { ArrowLeft, Check, Footprints, Info, X } from "lucide-react";
+import { Footprints, Info, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import MapView from "./MapView";
 import BottomSheet, { type SheetState } from "./BottomSheet";
 import DestinationPanel from "./DestinationPanel";
+import DocsPage from "./DocsPage";
 import PlaceSearch from "./PlaceSearch";
 import type { Map as RouteMap } from "maplibre-gl";
 import { downloadRoute, type ExportFormat } from "./lib/routeExport";
@@ -11,10 +12,9 @@ import {
   demoStart,
   isAtlantaSchool,
 } from "../shared/schools";
-import { demoGraph, type Place } from "../shared/demo";
+import type { Place } from "../shared/demo";
 import {
   defaultRequirements,
-  requiredRoutes,
   requirementSchema,
   type Requirements,
   type Route,
@@ -23,11 +23,6 @@ type SavedPlace = Place & {
   visibility: "private";
   label: string;
   isHome?: boolean;
-};
-type Trip = {
-  started: number;
-  route: Route;
-  destination: Place;
 };
 const requirementDefaultsVersion = "all-checked-v2";
 const initialRequirements = () => {
@@ -104,8 +99,6 @@ export default function App() {
     const home = readSavedHome();
     return home ? [home] : [];
   });
-  const [trip, setTrip] = useState<Trip | null>(null);
-  const [now, setNow] = useState(Date.now());
   const selected = routes[0];
   const mapRoutes = useMemo(() => (selected ? [selected] : []), [selected]);
   const home = saved.find((place) => place.isHome);
@@ -121,7 +114,7 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
-    if (home && !trip && !explicitStart.current) {
+    if (home && !explicitStart.current) {
       setStart({ ...home, name: "Home" });
       setHasStart(true);
     }
@@ -142,10 +135,6 @@ export default function App() {
   function selectDestination(place: Place) {
     if (!isAtlantaSchool(place)) {
       setNotice("Choose an Atlanta school as your destination.");
-      return;
-    }
-    if (trip) {
-      setNotice("End your walk before changing the route.");
       return;
     }
     setEnd(place);
@@ -240,12 +229,6 @@ export default function App() {
     return () => clearTimeout(t);
   }, [notice]);
   useEffect(() => {
-    if (!trip) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [trip?.started]);
-  useEffect(() => {
     if (!hasDestination || !hasStart) {
       setRoutes([]);
       setLoading(false);
@@ -266,6 +249,7 @@ export default function App() {
         .then(async (response) => {
           if (!response.ok) return;
           const details = await response.json();
+          if (controller.signal.aborted) return;
           setRoutes((current) =>
             current.map((candidate, index) =>
               index === 0 && candidate.coordinates === route.coordinates
@@ -287,6 +271,7 @@ export default function App() {
               end: end.coordinate,
               requirements,
               avoidBusyRoads,
+              fast: false,
             }),
             signal: controller.signal,
           });
@@ -298,6 +283,7 @@ export default function App() {
         if (!response.headers.get("content-type")?.includes("application/json"))
           throw new Error("API_OFFLINE");
         const data = await response.json();
+        if (controller.signal.aborted) return;
         if (!response.ok) {
           setRoutes(data.route ? [data.route] : []);
           setRouteError(data.error);
@@ -305,20 +291,13 @@ export default function App() {
         }
         setRoutes(data.routes);
         if (data.routes[0]) addCrossingDetails(data.routes[0]);
+        setLoading(false);
       } catch (e) {
         if (controller.signal.aborted) return;
-        try {
-          setRoutes(
-            requiredRoutes(
-              demoGraph,
-              start.coordinate,
-              end.coordinate,
-              requirements,
-            ),
-          );
-        } catch (error) {
-          setRouteError((error as Error).message);
-        }
+        setRoutes([]);
+        setRouteError(
+          "Live routing is unavailable right now. Please try again shortly.",
+        );
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -397,10 +376,6 @@ export default function App() {
     setModal(null);
     setNotice("Saved Home removed from this device.");
   }
-  async function endWalk(arrived: boolean) {
-    setTrip(null);
-    setNotice(arrived ? "Arrival confirmed." : "Walk ended.");
-  }
   return (
     <div className="app-shell">
       <header>
@@ -415,11 +390,13 @@ export default function App() {
           <span className="brand-icon">
             <Footprints size={32} strokeWidth={2} aria-hidden="true" />
           </span>
-          <span>Walkwise</span>
+          <span className="brand-name">
+            Walkwise <em>Atlanta</em>
+          </span>
         </a>
         <nav aria-label="Main navigation">
           <button
-            aria-label="Data and API documentation"
+            aria-label="About routes and data"
             className={tab === "docs" ? "active" : ""}
             onClick={() => {
               setTab("docs");
@@ -451,51 +428,6 @@ export default function App() {
               onExport={exportRoute}
               error={routeError}
               home={home}
-              walking={!!trip || exporting}
-              tripContent={
-                <>
-                  {" "}
-                  {trip && (
-                    <div className="active-trip">
-                      <span className="eyebrow">SAMPLE WALK IN PROGRESS</span>
-                      <h3>To {trip.destination.name}</h3>
-                      <p>
-                        Estimated arrival{" "}
-                        {new Date(
-                          trip.started + trip.route.minutes * 60000,
-                        ).toLocaleTimeString([], {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
-                      </p>
-                      <progress
-                        max={100}
-                        value={Math.min(
-                          100,
-                          ((now - trip.started) /
-                            (trip.route.minutes * 60000)) *
-                            100,
-                        )}
-                      />
-                      <button
-                        className="primary"
-                        disabled={busy}
-                        onClick={() => action(() => endWalk(true))}
-                      >
-                        <Check size={18} />
-                        Confirm arrival
-                      </button>
-                      <button
-                        className="text-link"
-                        disabled={busy}
-                        onClick={() => action(() => endWalk(false))}
-                      >
-                        End walk
-                      </button>
-                    </div>
-                  )}
-                </>
-              }
               onStart={selectStart}
               onDestination={selectDestination}
               onLocate={() => action(currentStart)}
@@ -505,245 +437,22 @@ export default function App() {
             />
           )}
           {tab === "docs" && (
-            <section className="docs-page" aria-labelledby="docs-title">
-              <div className="panel-heading">
-                <button
-                  className="back-button"
-                  onClick={() => {
-                    setTab("explore");
-                    setSheet("half");
-                  }}
-                >
-                  <ArrowLeft size={18} />
-                  Back to map
-                </button>
-                <h1 id="docs-title">Data & APIs</h1>
-              </div>
-              <details className="docs-disclosure">
-                <summary>Routing algorithm</summary>
-                <div className="algorithm-docs">
-                  <h2>Routing algorithm</h2>
-                  <strong>
-                    Bidirectional A* with traffic and road-class exposure
-                  </strong>
-                  <ol>
-                    <li>Valhalla generates pedestrian route candidates.</li>
-                    <li>
-                      Scores sidewalks, crossings, speed, 2025 GDOT traffic, and
-                      OpenStreetMap road class.
-                    </li>
-                    <li>Avoids failed areas in one parallel reroute.</li>
-                    <li>
-                      “Avoid busier roads” adds a search around yellow main
-                      roads.
-                    </li>
-                    <li>
-                      The lowest-risk passing route wins. If none passes, the
-                      best walkable route is shown with warnings.
-                    </li>
-                  </ol>
-                  <h2>Variables</h2>
-                  <div className="variable-list">
-                    <div>
-                      <code>M</code>
-                      <span>Missing-sidewalk exposure</span>
-                      <b>weight 9</b>
-                    </div>
-                    <div>
-                      <code>C</code>
-                      <span>Crossing exposure</span>
-                      <b>weight 7</b>
-                    </div>
-                    <div>
-                      <code>V</code>
-                      <span>Vehicle-speed exposure</span>
-                      <b>weight 6</b>
-                    </div>
-                    <div>
-                      <code>T</code>
-                      <span>Traffic and busier-road exposure</span>
-                      <b>weight 22 when enabled</b>
-                    </div>
-                  </div>
-                  <code className="algorithm-formula">
-                    R = 100 &times; (9M + 7C + 6V + wT) / (22 + w)
-                  </code>
-                  <p className="traffic-method">
-                    T = max(&#8730;(AADT / 40,000), road-class estimate), capped
-                    at 1. The traffic weight w is 22 when enabled and 4
-                    otherwise.
-                  </p>
-                  <div className="requirement-variables">
-                    <p>
-                      <code>avoidBusyRoads</code>
-                      Avoids yellow main roads and prefers lower traffic.
-                    </p>
-                    <p>
-                      <code>requirements.speed</code>
-                      Requires mapped roads to be 35 mph or less.
-                    </p>
-                    <p>
-                      <code>requirements.crosswalks</code>
-                      Requires a mapped crosswalk at each road crossing.
-                    </p>
-                    <p>
-                      <code>requirements.sidewalks</code>
-                      Requires sidewalks or walking-only paths.
-                    </p>
-                    <p>Checks ignore the final 180 meters around the school.</p>
-                  </div>
-                </div>
-              </details>
-              <details className="docs-disclosure">
-                <summary>External data</summary>
-                <h2 className="spaced">External data</h2>
-                <div className="api-list">
-                  <a
-                    className="api-row"
-                    href="https://services1.arcgis.com/AQDHTHDrZzfsFsB5/ArcGIS/rest/services/pubgis_DBO_Education_Schools/FeatureServer/0"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Atlanta ArcGIS school directory</strong>
-                    <span>School details and locations</span>
-                    <code>Education_Schools / FeatureServer / 0</code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://gdottrafficdata.drakewell.com/publicmultinodemap.asp"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>GDOT TADA traffic counts</strong>
-                    <span>2025 daily traffic counts</span>
-                    <code>Traffic_Tabular.zip / AADT_2025</code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://photon.komoot.io/"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Photon</strong>
-                    <span>Address autocomplete</span>
-                    <code>photon.komoot.io/api</code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://nominatim.org/"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Nominatim</strong>
-                    <span>Coordinates to addresses</span>
-                    <code>nominatim.openstreetmap.org/reverse</code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://valhalla.github.io/valhalla/api/turn-by-turn/api-reference/"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Valhalla route API</strong>
-                    <span>Walking routes, distance, and time</span>
-                    <code>valhalla1.openstreetmap.de/route</code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://valhalla.github.io/valhalla/api/map-matching/api-reference/"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Valhalla trace attributes</strong>
-                    <span>Sidewalks, speeds, and crossings</span>
-                    <code>valhalla1.openstreetmap.de/trace_attributes</code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://www.arcgis.com/home/item.html?id=b98b545b79604fdcb7598e059181ea44"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Atlanta Sidewalks Inventory</strong>
-                    <span>Sidewalk locations and types</span>
-                    <code>services2.arcgis.com/.../Sidewalks_Inventory</code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://dpwgis.atlantaga.gov/hostingserver/rest/services/Signalized_Intersections/FeatureServer/0"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Atlanta Signalized Intersections</strong>
-                    <span>Signalized crossings</span>
-                    <code>
-                      dpwgis.atlantaga.gov/.../Signalized_Intersections
-                    </code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://wiki.openstreetmap.org/wiki/Overpass_API"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Overpass API</strong>
-                    <span>Mapped sidewalks and crosswalks</span>
-                    <code>overpass-api.de/api/interpreter</code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://www.openstreetmap.org/copyright"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>OpenStreetMap</strong>
-                    <span>Street data and map tiles</span>
-                    <code>
-                      tile.openstreetmap.org/&#123;z&#125;/&#123;x&#125;/&#123;y&#125;.png
-                    </code>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://developer.mozilla.org/en-US/docs/Web/API/Geolocation_API"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Browser Geolocation API</strong>
-                    <span>Current location, with permission</span>
-                  </a>
-                  <a
-                    className="api-row"
-                    href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Storage_API"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>Browser Web Storage API</strong>
-                    <span>Saved settings on this device</span>
-                    <code>localStorage</code>
-                  </a>
-                </div>
-              </details>
-              <details className="docs-disclosure">
-                <summary>Walkwise endpoints</summary>
-                <h2 className="spaced">Walkwise endpoints</h2>
-                <div className="endpoint-list">
-                  <code>GET /api/health</code>
-                  <code>GET /api/schools</code>
-                  <code>GET /api/search</code>
-                  <code>GET /api/reverse</code>
-                  <code>POST /api/routes</code>
-                  <code>POST /api/route-details</code>
-                </div>
-              </details>
-              <p className="docs-note">
-                Checks use Atlanta and OpenStreetMap sidewalks, Valhalla street
-                tags, 2025 GDOT traffic, mapped speeds and crossings, and
-                Atlanta signal records. Coverage may be incomplete.
-              </p>
-            </section>
+            <DocsPage
+              onBack={() => {
+                setTab("explore");
+                setSheet("half");
+              }}
+            />
           )}
         </BottomSheet>
         <section className="map-region" aria-label="Atlanta route map">
+          {selected && (
+            <div className="map-guide">
+              <span className="map-guide-line" aria-hidden="true" />
+              Follow the blue line <span aria-hidden="true">·</span> Tap ! for
+              details
+            </div>
+          )}
           <MapView
             exportMap={exportMap}
             routes={mapRoutes}
@@ -753,15 +462,11 @@ export default function App() {
             end={hasDestination ? end : undefined}
             onPick={(p) => {
               if (exporting) return;
-              if (trip) {
-                setNotice("End your walk before changing the destination.");
-                return;
-              }
-              setMapPlace(p);
+              if (isAtlantaSchool(p)) selectDestination(p);
+              else setMapPlace(p);
             }}
             pickedPlace={mapPlace}
             onClosePlace={() => setMapPlace(null)}
-            onDirections={selectDestination}
             onStartHere={(place) => {
               selectStart(place);
               setMapPlace(null);

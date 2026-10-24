@@ -1,17 +1,24 @@
 {
-  "name": "atlanta-walkwise",
+  "name": "walkwise-atlanta",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "concurrently --kill-others --names Web,API \"npm:dev:web\" \"npm:dev:api\"",
-    "dev:api": "tsx watch server/index.ts",
-    "build": "tsc -b && vite build",
-    "test": "vitest run",
-    "start": "tsx server/index.ts",
-    "dev:web": "vite --host 127.0.0.1",
+    "dev:api": "node --require ./scripts/tsx-userinfo.cjs --import tsx --watch server/index.ts",
+    "dev:worker": "npm run build && wrangler dev",
+    "build": "tsc -b && vite build --configLoader runner",
+    "typecheck:worker": "wrangler types && tsc -p tsconfig.worker.json",
+    "build:worker": "npm run build && npm run typecheck:worker && wrangler deploy --dry-run --outdir .qa/worker-build",
+    "deploy": "npm run build && npm run typecheck:worker && wrangler deploy",
+    "test": "vitest run --configLoader runner",
+    "start": "node --require ./scripts/tsx-userinfo.cjs --import tsx server/index.ts",
+    "dev:web": "vite --host 127.0.0.1 --configLoader runner",
     "format": "prettier --write src shared server tests vite.config.ts",
-    "test:ui": "node scripts/verify-ui.mjs"
+    "test:ui": "node scripts/verify-ui.mjs",
+    "test:resilience": "node scripts/verify-resilience.mjs",
+    "test:stress": "node scripts/stress-api.mjs",
+    "test:mobile": "node scripts/verify-mobile.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
@@ -38,6 +45,7 @@
     "tsx": "^4.20.5",
     "typescript": "~5.9.2",
     "vite": "^7.1.5",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.151.3"
   }
 }

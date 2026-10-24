@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useCallback,
@@ -14,11 +15,14 @@ import { createRoot } from "react-dom/client";
 import PlaceIcon from "./PlaceIcon";
 import { displayCrossings, distance } from "../shared/routing";
 import type { SheetState } from "./BottomSheet";
-import { routePadding } from "./lib/mapLayout";
+import {
+  pointOnRoute,
+  routePadding,
+  sidewalkWarningOnRoute,
+} from "./lib/mapLayout";
 import type { FeatureCollection } from "geojson";
 import type { Coordinate, Route } from "../shared/routing";
 import type { Place } from "../shared/demo";
-import { isAtlantaSchool } from "../shared/schools";
 import { useSchools } from "./lib/useSchools";
 
 type Props = {
@@ -30,7 +34,6 @@ type Props = {
   end?: Place;
   pickedPlace?: Place | null;
   onClosePlace?: () => void;
-  onDirections?: (place: Place) => void;
   onStartHere?: (place: Place) => void;
   bottomInset?: SheetState;
   onPick: (place: Place) => void;
@@ -38,7 +41,7 @@ type Props = {
 export function crossingWarningStrip(
   coordinate: Coordinate,
   route: Coordinate[],
-  halfLengthMeters = 7,
+  halfLengthMeters = 20,
 ): Coordinate[] {
   if (route.length < 2) return [];
   const latitudeRadians = (coordinate[1] * Math.PI) / 180;
@@ -101,7 +104,6 @@ export default function MapView({
   onPick,
   pickedPlace = null,
   onClosePlace,
-  onDirections,
   onStartHere,
   bottomInset = "half",
 }: Props) {
@@ -117,41 +119,48 @@ export default function MapView({
   const [ready, setReady] = useState(false),
     [error, setError] = useState("");
   const currentRoute = routes.find((route) => route.category === selected);
-  const routeDiagnostics = [
-    ...(currentRoute?.alerts || []),
-    ...(currentRoute?.violations || []),
-  ].filter(
-    (warning, index, all) =>
-      all.findIndex(
-        (candidate) =>
-          candidate.requirement === warning.requirement &&
-          distance(candidate.coordinate, warning.coordinate) < 8,
-      ) === index,
+  const routeDiagnostics = useMemo(
+    () =>
+      [
+        ...(currentRoute?.alerts || []),
+        ...(currentRoute?.violations || []),
+      ].filter(
+        (warning, index, all) =>
+          all.findIndex(
+            (candidate) =>
+              candidate.requirement === warning.requirement &&
+              distance(candidate.coordinate, warning.coordinate) < 8,
+          ) === index,
+      ),
+    [currentRoute],
   );
-  const routeDataKey =
-    selected +
-    "|" +
-    routes
-      .map(
-        (route) =>
-          route.category +
-          ":" +
-          route.coordinates
-            .map((coordinate) => coordinate.join(","))
-            .join(";") +
-          ":" +
-          [...(route.alerts || []), ...(route.violations || [])]
-            .map(
-              (violation) =>
-                violation.requirement +
-                "@" +
-                violation.coordinate.join(",") +
-                ":" +
-                violation.label,
-            )
-            .join(";"),
-      )
-      .join("|");
+  const routeDataKey = useMemo(
+    () =>
+      selected +
+      "|" +
+      routes
+        .map(
+          (route) =>
+            route.category +
+            ":" +
+            route.coordinates
+              .map((coordinate) => coordinate.join(","))
+              .join(";") +
+            ":" +
+            [...(route.alerts || []), ...(route.violations || [])]
+              .map(
+                (violation) =>
+                  violation.requirement +
+                  "@" +
+                  violation.coordinate.join(",") +
+                  ":" +
+                  violation.label,
+              )
+              .join(";"),
+        )
+        .join("|"),
+    [routes, selected],
+  );
   const fitRoute = useCallback(() => {
     const m = map.current;
     if (!m || !currentRoute || !container.current?.clientWidth) return;
@@ -159,16 +168,23 @@ export default function MapView({
     currentRoute.coordinates.forEach((c) => bounds.extend(c));
     bounds.extend(start.coordinate);
     if (end) bounds.extend(end.coordinate);
+    const mapBox = container.current.getBoundingClientRect();
+    const plannerBox = document
+      .querySelector(".planner")
+      ?.getBoundingClientRect();
+    const mobile = window.innerWidth <= 900;
+    const sideSheet =
+      mobile && plannerBox && plannerBox.width < mapBox.width * 0.85;
     m.fitBounds(bounds, {
       padding: routePadding(
         container.current.clientWidth,
         container.current.clientHeight,
-        window.innerWidth > 900,
-        window.innerWidth <= 900
-          ? bottomInset === "collapsed"
-            ? 132
-            : container.current.clientHeight *
-              (bottomInset === "half" ? (routes.length ? 0.54 : 0.48) : 0.84)
+        !mobile,
+        mobile && !sideSheet && plannerBox
+          ? Math.max(0, mapBox.bottom - plannerBox.top)
+          : 0,
+        sideSheet && plannerBox
+          ? Math.max(0, mapBox.right - plannerBox.left)
           : 0,
       ),
       maxZoom: 15.5,
@@ -177,6 +193,8 @@ export default function MapView({
         : 400,
     });
   }, [currentRoute, start, end, bottomInset]);
+  const fitRouteRef = useRef(fitRoute);
+  fitRouteRef.current = fitRoute;
   useEffect(() => {
     if (!container.current) return;
     setReady(false);
@@ -270,6 +288,8 @@ export default function MapView({
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         map.current?.resize();
+        if (container.current?.dataset.routeExport !== "true")
+          fitRouteRef.current();
       });
     });
     observer.observe(container.current);
@@ -287,7 +307,6 @@ export default function MapView({
         type: "Feature",
         properties: {
           selected: route.category === selected,
-          failed: Boolean(route.violations?.length),
         },
         geometry: { type: "LineString", coordinates: route.coordinates },
       })),
@@ -325,29 +344,32 @@ export default function MapView({
         filter: ["==", ["get", "selected"], true],
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
-          "line-color": ["case", ["get", "failed"], "#c43f35", "#145cdb"],
+          "line-color": "#145cdb",
           "line-width": 8,
         },
       });
     }
     const sidewalkWarningData: FeatureCollection = {
       type: "FeatureCollection",
-      features: routeDiagnostics.flatMap((warning) =>
-        warning.requirement === "sidewalks" &&
-        warning.geometry &&
-        warning.geometry.length > 1
+      features: routeDiagnostics.flatMap((warning) => {
+        if (warning.requirement !== "sidewalks" || !warning.geometry) return [];
+        const geometry = sidewalkWarningOnRoute(
+          warning.geometry,
+          currentRoute?.coordinates || [],
+        );
+        return geometry.length > 1
           ? [
               {
                 type: "Feature" as const,
                 properties: { label: warning.label },
                 geometry: {
                   type: "LineString" as const,
-                  coordinates: warning.geometry,
+                  coordinates: geometry,
                 },
               },
             ]
-          : [],
-      ),
+          : [];
+      }),
     };
     const sidewalkWarningSource = m.getSource("sidewalk-warnings") as
       maplibregl.GeoJSONSource | undefined;
@@ -365,8 +387,9 @@ export default function MapView({
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-color": "#c85524",
-          "line-width": 7,
-          "line-opacity": 0.92,
+          "line-width": 4,
+          "line-opacity": 0.82,
+          "line-dasharray": [2, 1.5],
         },
       });
     }
@@ -375,19 +398,29 @@ export default function MapView({
       features: currentRoute
         ? displayCrossings(currentRoute.crossings || []).flatMap((crossing) => {
             if (
-              crossing.marked !== false ||
+              crossing.marked === true ||
               (end && distance(crossing.coordinate, end.coordinate) <= 180)
             )
               return [];
-            const strip = crossingWarningStrip(
+            const coordinate = pointOnRoute(
               crossing.coordinate,
+              currentRoute.coordinates,
+            );
+            if (!coordinate) return [];
+            const strip = crossingWarningStrip(
+              coordinate,
               currentRoute.coordinates,
             );
             return strip.length === 2
               ? [
                   {
                     type: "Feature" as const,
-                    properties: { label: "Suspected no crossing markings" },
+                    properties: {
+                      label: crossing.likely
+                        ? "Likely crossing; markings not verified"
+                        : "Crosswalk not verified",
+                      likely: Boolean(crossing.likely),
+                    },
                     geometry: {
                       type: "LineString" as const,
                       coordinates: strip,
@@ -411,10 +444,10 @@ export default function MapView({
         id: "suspected-unmarked-crossings",
         type: "line",
         source: "unmarked-crossing-warnings",
-        layout: { "line-cap": "butt", "line-join": "round" },
+        layout: { "line-cap": "round", "line-join": "round" },
         paint: {
-          "line-color": "#d7352f",
-          "line-width": 6,
+          "line-color": ["case", ["get", "likely"], "#bc6518", "#d7352f"],
+          "line-width": 10,
           "line-opacity": 0.96,
         },
       });
@@ -463,6 +496,7 @@ export default function MapView({
             ? "Destination school: "
             : "Select school: ") + place.name,
       );
+      element.title = place.name;
       element.addEventListener("click", (e) => {
         e.stopPropagation();
         pick.current(place);
@@ -499,19 +533,43 @@ export default function MapView({
     if (!m || !ready || !currentRoute?.crossings?.length) return;
     const roots: ReturnType<typeof createRoot>[] = [];
     const crossings = displayCrossings(currentRoute.crossings)
-      .filter((crossing) => crossing.marked !== false)
+      .filter((crossing) => crossing.marked === true)
+      .map((crossing) => ({
+        ...crossing,
+        coordinate: pointOnRoute(crossing.coordinate, currentRoute.coordinates),
+      }))
+      .filter(
+        (crossing): crossing is typeof crossing & { coordinate: Coordinate } =>
+          crossing.coordinate !== null,
+      )
       .sort((a, b) => Number(b.signalized) - Number(a.signalized));
     const records = crossings.map((crossing, index) => {
-      const element = document.createElement("div");
+      const element = document.createElement("button");
+      element.type = "button";
       element.className =
         "crossing-marker" + (crossing.signalized ? " signalized" : "");
       const label = crossing.signalized
-        ? "Crossing symbol (crossing lights)"
-        : "Crossing symbol";
+        ? "Mapped signalized crosswalk"
+        : "Mapped crosswalk";
       element.setAttribute("aria-label", label + " " + (index + 1));
-      element.title = label;
+      element.setAttribute("aria-expanded", "false");
+      element.addEventListener("click", (event) => {
+        event.stopPropagation();
+        element.classList.toggle("expanded");
+        element.setAttribute(
+          "aria-expanded",
+          String(element.classList.contains("expanded")),
+        );
+      });
       const root = createRoot(element);
-      root.render(<Footprints aria-hidden="true" strokeWidth={2.4} />);
+      root.render(
+        <>
+          <Footprints aria-hidden="true" strokeWidth={2.4} />
+          <span className="crossing-marker-tooltip" aria-hidden="true">
+            {label}
+          </span>
+        </>,
+      );
       roots.push(root);
       const marker = new maplibregl.Marker({ element, anchor: "center" })
         .setLngLat(crossing.coordinate)
@@ -543,6 +601,73 @@ export default function MapView({
   }, [currentRoute, ready, routeDataKey]);
   useEffect(() => {
     const m = map.current;
+    if (!m || !ready || !currentRoute?.crossings?.length) return;
+    const warnings = displayCrossings(currentRoute.crossings)
+      .filter(
+        (crossing) =>
+          crossing.marked !== true &&
+          (!end || distance(crossing.coordinate, end.coordinate) > 180),
+      )
+      .map((crossing) => ({
+        ...crossing,
+        coordinate: pointOnRoute(crossing.coordinate, currentRoute.coordinates),
+      }))
+      .filter(
+        (crossing): crossing is typeof crossing & { coordinate: Coordinate } =>
+          crossing.coordinate !== null,
+      );
+    const records = warnings
+      .sort((a, b) => Number(Boolean(a.likely)) - Number(Boolean(b.likely)))
+      .map((crossing) => {
+        const label = crossing.likely
+          ? "Likely crossing; markings not verified"
+          : "Crosswalk not verified";
+        const element = document.createElement("button");
+        element.type = "button";
+        element.className =
+          "crossing-warning-marker" + (crossing.likely ? " likely" : "");
+        element.setAttribute("aria-label", label);
+        element.setAttribute("aria-expanded", "false");
+        const icon = document.createElement("span");
+        icon.setAttribute("aria-hidden", "true");
+        icon.textContent = "!";
+        const detail = document.createElement("span");
+        detail.className = "crossing-warning-detail";
+        detail.textContent = label;
+        element.append(icon, detail);
+        element.addEventListener("click", (event) => {
+          event.stopPropagation();
+          element.classList.toggle("expanded");
+          element.setAttribute(
+            "aria-expanded",
+            String(element.classList.contains("expanded")),
+          );
+        });
+        const marker = new maplibregl.Marker({ element, anchor: "center" })
+          .setLngLat(crossing.coordinate)
+          .addTo(m);
+        return { crossing, element, marker };
+      });
+    const updateMarkerLayout = () => {
+      const shown: { x: number; y: number }[] = [];
+      for (const record of records) {
+        const point = m.project(record.crossing.coordinate);
+        const overlaps = shown.some(
+          (other) => Math.hypot(other.x - point.x, other.y - point.y) < 34,
+        );
+        record.element.hidden = overlaps;
+        if (!overlaps) shown.push(point);
+      }
+    };
+    updateMarkerLayout();
+    m.on("moveend", updateMarkerLayout);
+    return () => {
+      m.off("moveend", updateMarkerLayout);
+      records.forEach(({ marker }) => marker.remove());
+    };
+  }, [currentRoute, end, ready]);
+  useEffect(() => {
+    const m = map.current;
     if (!m || !ready || !routeDiagnostics.length) return;
     const groups: {
       coordinate: Coordinate;
@@ -553,20 +678,28 @@ export default function MapView({
     }[] = [];
     for (const violation of routeDiagnostics) {
       if (violation.requirement === "crosswalks") continue;
+      const coordinate = pointOnRoute(
+        violation.coordinate,
+        currentRoute!.coordinates,
+      );
+      if (!coordinate) continue;
       const existing = groups.find(
         (group) =>
           group.requirement === violation.requirement &&
-          distance(group.coordinate, violation.coordinate) <= 35 &&
-          (violation.requirement !== "speed" ||
-            (group.roadName === violation.roadName &&
-              group.speedLimitMph === violation.speedLimitMph)),
+          (violation.requirement === "sidewalks"
+            ? (group.roadName || "Unnamed road") ===
+              (violation.roadName || "Unnamed road")
+            : distance(group.coordinate, coordinate) <= 35 &&
+              (violation.requirement !== "speed" ||
+                (group.roadName === violation.roadName &&
+                  group.speedLimitMph === violation.speedLimitMph))),
       );
       if (existing) {
         if (!existing.labels.includes(violation.label))
           existing.labels.push(violation.label);
       } else {
         groups.push({
-          coordinate: violation.coordinate,
+          coordinate,
           labels: [violation.label],
           requirement: violation.requirement,
           roadName: violation.roadName,
@@ -579,7 +712,6 @@ export default function MapView({
       element.className =
         "route-violation-marker " +
         (group.requirement === "speed" ? "speed-warning" : "sidewalk-warning");
-      const fullLabel = group.labels.join(" \u00b7 ");
       if (group.requirement === "speed") {
         const road = document.createElement("span");
         road.className = "speed-warning-road";
@@ -591,18 +723,58 @@ export default function MapView({
             ? group.speedLimitMph + " mph"
             : "Speed unknown";
         element.append(road, limit);
-        element.title = fullLabel;
       } else {
-        element.textContent = fullLabel;
+        const icon = document.createElement("span");
+        icon.className = "sidewalk-warning-icon";
+        icon.textContent = "S";
+        icon.setAttribute("aria-hidden", "true");
+        const detail = document.createElement("span");
+        detail.className = "sidewalk-warning-detail";
+        detail.textContent =
+          group.roadName && group.roadName !== "Unnamed road"
+            ? "Sidewalk gap · " + group.roadName
+            : "Sidewalk gap";
+        element.append(icon, detail);
       }
+      element.setAttribute("role", "button");
+      element.setAttribute("aria-expanded", "false");
       element.setAttribute(
         "aria-label",
         "Route problem " + (index + 1) + ": " + group.labels.join(", "),
       );
+      element.tabIndex = 0;
+      element.addEventListener("click", (event) => {
+        event.stopPropagation();
+        element.classList.toggle("expanded");
+        element.setAttribute(
+          "aria-expanded",
+          String(element.classList.contains("expanded")),
+        );
+      });
+      element.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          element.classList.toggle("expanded");
+          element.setAttribute(
+            "aria-expanded",
+            String(element.classList.contains("expanded")),
+          );
+        }
+      });
       return new maplibregl.Marker({
         element,
         anchor: group.requirement === "speed" ? "bottom" : "center",
-        offset: group.requirement === "speed" ? [0, -8] : [0, 0],
+        offset:
+          group.requirement === "speed"
+            ? [0, -8]
+            : group.requirement === "sidewalks" &&
+                currentRoute?.crossings?.some(
+                  (crossing) =>
+                    crossing.marked !== true &&
+                    distance(crossing.coordinate, group.coordinate) < 25,
+                )
+              ? [0, -38]
+              : [0, 0],
       })
         .setLngLat(group.coordinate)
         .addTo(m);
@@ -618,23 +790,13 @@ export default function MapView({
       <div className="place-popup">
         <strong>{pickedPlace.name}</strong>
         <small>{pickedPlace.area}</small>
-        {isAtlantaSchool(pickedPlace) ? (
-          <button
-            className="popup-directions"
-            onClick={() => onDirections?.(pickedPlace)}
-          >
-            Get Directions
-            <ArrowRight size={17} />
-          </button>
-        ) : (
-          <button
-            className="popup-directions"
-            onClick={() => onStartHere?.(pickedPlace)}
-          >
-            Use as starting point
-            <ArrowRight size={17} />
-          </button>
-        )}
+        <button
+          className="popup-directions"
+          onClick={() => onStartHere?.(pickedPlace)}
+        >
+          Use as starting point
+          <ArrowRight size={17} />
+        </button>
       </div>,
     );
     const popup = new maplibregl.Popup({
@@ -654,7 +816,7 @@ export default function MapView({
       popup.remove();
       queueMicrotask(() => root.unmount());
     };
-  }, [pickedPlace, ready, onClosePlace, onDirections, onStartHere]);
+  }, [pickedPlace, ready, onClosePlace, onStartHere]);
 
   return (
     <div className="map-container">
