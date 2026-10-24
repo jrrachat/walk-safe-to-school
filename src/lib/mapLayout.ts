@@ -156,7 +156,10 @@ export function routePadding(
   const visible = Math.max(100, height - covered);
   const left = Math.min(90, width * 0.2);
   return {
-    top: Math.min(80, visible * 0.22),
+    top:
+      covered > 0
+        ? Math.min(100, visible * 0.35)
+        : Math.min(80, visible * 0.22),
     bottom: covered + Math.min(60, visible * 0.18),
     left,
     right: Math.min(

@@ -53,6 +53,8 @@ export default function PlaceSearch({
       .sort((a, b) => Number(b.kind === "School") - Number(a.kind === "School"))
       .slice(0, 6);
   }, [query, remote, prominent, places]);
+  const showResults =
+    options.length > 0 || loading || Boolean(error) || remote !== null;
   async function search() {
     if (query.trim().length < 2) return;
     abort.current?.abort();
@@ -149,7 +151,7 @@ export default function PlaceSearch({
           )}
         </div>
       </label>
-      {open && (
+      {open && showResults && (
         <div className="place-results">
           {options.map((p) => (
             <button

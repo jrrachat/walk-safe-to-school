@@ -93,6 +93,8 @@ try {
     }),
   );
   await page.goto(base, { waitUntil: "domcontentloaded" });
+  await page.getByRole("textbox", { name: "Starting point" }).focus();
+  await expect(page.locator(".place-results")).toHaveCount(0);
   await page.getByRole("textbox", { name: "Starting point" }).fill("Piedmont");
   await page
     .locator(".place-results")
@@ -117,6 +119,7 @@ try {
     [844, 390],
   ]) {
     await page.setViewportSize({ width, height });
+    await page.waitForTimeout(500);
     await expect(page.locator(".planner")).toBeVisible();
     const brand = await page.locator(".brand").boundingBox();
     const docsButton = await page
@@ -139,11 +142,20 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   const crossingWarning = page.locator(".crossing-warning-marker");
   await expect(crossingWarning).toHaveCSS("width", "38px");
+  await page.waitForTimeout(600);
+  const markerTransform = await crossingWarning.evaluate(
+    (element) => getComputedStyle(element).transform,
+  );
   await crossingWarning.hover();
   await expect(
     crossingWarning.locator(".crossing-warning-detail"),
   ).toBeVisible();
   await expect(crossingWarning).toHaveCSS("width", "38px");
+  expect(
+    await crossingWarning.evaluate(
+      (element) => getComputedStyle(element).transform,
+    ),
+  ).toBe(markerTransform);
   await page.screenshot({ path: ".qa/warning-hover.png" });
   await crossingWarning.click();
   await expect(crossingWarning).toHaveAttribute("aria-expanded", "true");
@@ -155,8 +167,12 @@ try {
   await expect(warningMarker).toHaveCSS("width", "28px");
   await warningMarker.click();
   await expect(warningMarker).toHaveClass(/expanded/);
+  await page.locator(".maplibregl-ctrl-zoom-in").click();
+  await expect(crossingWarning).toHaveCSS("width", "38px");
+  expect(routeRequests).toBe(1);
   await page.getByRole("button", { name: "About routes and data" }).click();
   await expect(page.locator(".docs-summary")).toBeVisible();
+  await expect(page.locator(".map-region")).toBeHidden();
   await page.getByText("Data sources", { exact: true }).click();
   expect(
     await page.evaluate(

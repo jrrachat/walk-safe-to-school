@@ -4,6 +4,7 @@ import atlantaTrafficData from "./data/gdot-traffic-atlanta-2025.json";
 import type { Place } from "../shared/demo";
 import { isAtlantaSchool } from "../shared/schools";
 import {
+  compareEvaluatedRoutes,
   coordinateSchema,
   defaults,
   distance,
@@ -11,6 +12,7 @@ import {
   meetsRequirements,
   requirementFailureLabels,
   requirementKeys,
+  trafficWeights,
   type Category,
   type Coordinate,
   type Edge,
@@ -2190,7 +2192,9 @@ export function scoreLiveRisk(
   weights: Weights,
   avoidBusyRoads: boolean,
 ) {
-  const trafficWeight = avoidBusyRoads ? 22 : 4;
+  const trafficWeight = avoidBusyRoads
+    ? trafficWeights.preferred
+    : trafficWeights.relaxed;
   const totalWeight =
     factors.reduce((sum, factor) => sum + weights[factor], 0) + trafficWeight;
   const weightedBreakdown = Object.fromEntries(
@@ -2291,12 +2295,8 @@ export class RouteNotPossibleError extends Error {
 }
 
 function failedRoute(candidates: LiveCandidate[], requirements: Requirements) {
-  const best = [...candidates].sort(
-    (a, b) =>
-      failedRequirementCount(a, requirements) -
-        failedRequirementCount(b, requirements) ||
-      a.route.risk - b.route.risk ||
-      a.route.minutes - b.route.minutes,
+  const best = [...candidates].sort((a, b) =>
+    compareEvaluatedRoutes(a.route, b.route, requirements),
   )[0];
   const center =
     best.route.coordinates[Math.floor(best.route.coordinates.length / 2)];
@@ -2345,19 +2345,10 @@ function selectQualifyingRoute(
     meetsRequirements(candidate.route, requirements),
   );
   if (!qualifying.length) return undefined;
-  const safest = [...qualifying].sort(
-    (a, b) => a.route.risk - b.route.risk || a.route.minutes - b.route.minutes,
+  const safest = [...qualifying].sort((a, b) =>
+    compareEvaluatedRoutes(a.route, b.route, requirements),
   )[0];
   return [{ ...safest.route, category: "Lower Risk" as Category }];
-}
-
-function failedRequirementCount(
-  candidate: LiveCandidate,
-  requirements: Requirements,
-) {
-  return requirementKeys.filter(
-    (key) => requirements[key] && !candidate.route.checks?.[key].passes,
-  ).length;
 }
 
 function uniqueTrips(trips: LiveTrip[]) {
@@ -2567,11 +2558,8 @@ export async function liveRoutes(
   if (selected) return selected;
 
   if (!selected) {
-    const ranked = [...candidates].sort(
-      (a, b) =>
-        failedRequirementCount(a, requirements) -
-          failedRequirementCount(b, requirements) ||
-        a.route.risk - b.route.risk,
+    const ranked = [...candidates].sort((a, b) =>
+      compareEvaluatedRoutes(a.route, b.route, requirements),
     );
     const avoidanceSets = ranked
       .slice(0, 3)

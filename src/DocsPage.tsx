@@ -1,4 +1,5 @@
 import { ArrowLeft } from "lucide-react";
+import { defaults, trafficWeights } from "../shared/routing";
 
 type Props = { onBack: () => void };
 
@@ -114,10 +115,18 @@ export default function DocsPage({ onBack }: Props) {
       <details className="docs-disclosure">
         <summary>Scoring details</summary>
         <p className="scoring-note">
-          Each route gets a risk score from 0 to 100; lower is better. Weights:
-          sidewalks 9, crossings 7, speed 6, and traffic 22 when Avoid busier
-          roads is on (4 when off). Traffic uses 2025 GDOT counts where
-          available and road type elsewhere.
+          Each candidate walking route gets a risk score from 0 to 100; lower is
+          better. The score is a weighted average of sidewalk gaps (
+          {defaults.sidewalk}), crossing exposure ({defaults.crossings}), speed
+          exposure ({defaults.speed}), and traffic ({trafficWeights.preferred}{" "}
+          when Avoid busier roads is on, or {trafficWeights.relaxed} when off).
+          These weights were chosen by testing route scenarios. Traffic uses
+          2025 GDOT counts where available and road type elsewhere. Among routes
+          that pass every selected check, the lowest risk score wins. If none
+          passes, the app chooses the route with the fewest unmet checks, then
+          the lowest risk score. Walking time breaks ties. The displayed route
+          stays fixed until you change the starting point, destination, or
+          preferences.
         </p>
       </details>
     </section>

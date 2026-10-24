@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   compareRoutes,
+  compareEvaluatedRoutes,
   defaultRequirements,
   defaults,
   displayCrossings,
@@ -8,6 +9,7 @@ import {
   requiredRoutes,
   validateGraph,
   weightSchema,
+  unmetRequirementCount,
   type Graph,
 } from "../shared/routing";
 import { demoGraph, places } from "../shared/demo";
@@ -206,4 +208,40 @@ it("shows one crossing label for nearby edges at the same intersection", () => {
   ]);
   expect(visible).toHaveLength(2);
   expect(visible[0].signalized).toBe(true);
+});
+
+it("ranks evaluated routes by passed checks, risk, time, and stable geometry", () => {
+  const base = compareRoutes(
+    demoGraph,
+    places[0].coordinate,
+    places[2].coordinate,
+    defaults,
+  )[0];
+  const checks = {
+    speed: { applicable: true, passes: true },
+    crosswalks: { applicable: true, passes: true },
+    sidewalks: { applicable: true, passes: true },
+  };
+  const required = defaultRequirements;
+  const safe = { ...base, checks, risk: 30, minutes: 18 };
+  const risky = { ...safe, risk: 45, minutes: 10 };
+  const failed = {
+    ...safe,
+    risk: 5,
+    checks: { ...checks, sidewalks: { applicable: true, passes: false } },
+  };
+  expect(unmetRequirementCount(failed, required)).toBe(1);
+  expect(
+    [failed, risky, safe].sort((a, b) =>
+      compareEvaluatedRoutes(a, b, required),
+    ),
+  ).toEqual([safe, risky, failed]);
+  const tied = { ...safe, coordinates: [...safe.coordinates].reverse() };
+  const first = [safe, tied].sort((a, b) =>
+    compareEvaluatedRoutes(a, b, required),
+  )[0];
+  expect(
+    [tied, safe].sort((a, b) => compareEvaluatedRoutes(a, b, required))[0]
+      .coordinates,
+  ).toEqual(first.coordinates);
 });

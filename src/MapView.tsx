@@ -38,6 +38,17 @@ type Props = {
   bottomInset?: SheetState;
   onPick: (place: Place) => void;
 };
+
+function positionMarkerTooltip(
+  element: HTMLElement,
+  point: { x: number; y: number },
+  mapWidth: number,
+) {
+  element.classList.toggle("tooltip-below", point.y < 145);
+  element.classList.toggle("tooltip-left", point.x < 125);
+  element.classList.toggle("tooltip-right", point.x > mapWidth - 125);
+}
+
 export function crossingWarningStrip(
   coordinate: Coordinate,
   route: Coordinate[],
@@ -583,6 +594,11 @@ export default function MapView({
       for (const record of records) {
         record.element.style.setProperty("--crossing-marker-size", size + "px");
         const point = m.project(record.crossing.coordinate);
+        positionMarkerTooltip(
+          record.element,
+          point,
+          container.current?.clientWidth || 0,
+        );
         const overlaps = visible.some(
           (candidate) =>
             Math.hypot(candidate.x - point.x, candidate.y - point.y) < size + 4,
@@ -652,6 +668,11 @@ export default function MapView({
       const shown: { x: number; y: number }[] = [];
       for (const record of records) {
         const point = m.project(record.crossing.coordinate);
+        positionMarkerTooltip(
+          record.element,
+          point,
+          container.current?.clientWidth || 0,
+        );
         const overlaps = shown.some(
           (other) => Math.hypot(other.x - point.x, other.y - point.y) < 34,
         );
@@ -761,7 +782,7 @@ export default function MapView({
           );
         }
       });
-      return new maplibregl.Marker({
+      const marker = new maplibregl.Marker({
         element,
         anchor: group.requirement === "speed" ? "bottom" : "center",
         offset:
@@ -778,8 +799,22 @@ export default function MapView({
       })
         .setLngLat(group.coordinate)
         .addTo(m);
+      return { marker, element, coordinate: group.coordinate };
     });
-    return () => markers.forEach((marker) => marker.remove());
+    const updateTooltipLayout = () => {
+      for (const { element, coordinate } of markers)
+        positionMarkerTooltip(
+          element,
+          m.project(coordinate),
+          container.current?.clientWidth || 0,
+        );
+    };
+    updateTooltipLayout();
+    m.on("moveend", updateTooltipLayout);
+    return () => {
+      m.off("moveend", updateTooltipLayout);
+      markers.forEach(({ marker }) => marker.remove());
+    };
   }, [currentRoute, ready]);
   useEffect(() => {
     const m = map.current;

@@ -12,6 +12,7 @@ export const defaults: Weights = {
   crossings: 7,
   speed: 6,
 };
+export const trafficWeights = { preferred: 22, relaxed: 4 } as const;
 export const labels: Record<Factor, string> = {
   sidewalk: "Missing sidewalks",
   crossings: "Major-road crossings",
@@ -365,6 +366,27 @@ export function meetsRequirements(route: Route, required: Requirements) {
   return requirementKeys.every((key) => !required[key] || checks[key].passes);
 }
 
+export function unmetRequirementCount(route: Route, required: Requirements) {
+  const checks = route.checks || demoRouteChecks(route);
+  return requirementKeys.filter((key) => required[key] && !checks[key].passes)
+    .length;
+}
+
+/** Apply the same ranking to every evaluated route, with stable ties. */
+export function compareEvaluatedRoutes(
+  a: Route,
+  b: Route,
+  required: Requirements,
+) {
+  return (
+    unmetRequirementCount(a, required) - unmetRequirementCount(b, required) ||
+    a.risk - b.risk ||
+    a.minutes - b.minutes ||
+    a.meters - b.meters ||
+    JSON.stringify(a.coordinates).localeCompare(JSON.stringify(b.coordinates))
+  );
+}
+
 export function requiredRoutes(
   graph: Graph,
   start: Coordinate,
@@ -383,8 +405,8 @@ export function requiredRoutes(
     meetsRequirements(route, required),
   );
   if (!qualifying.length) throw new Error("Route not possible.");
-  const safest = [...qualifying].sort(
-    (a, b) => a.risk - b.risk || a.minutes - b.minutes,
+  const safest = [...qualifying].sort((a, b) =>
+    compareEvaluatedRoutes(a, b, required),
   )[0];
   return [{ ...safest, category: "Lower Risk" as Category }];
 }

@@ -211,6 +211,22 @@ describe("live route attribute scoring", () => {
     );
   });
 
+  it("uses scenario-tested weights to change the tradeoff for busy roads", () => {
+    const sidewalkGap = { sidewalk: 0.9, crossings: 0, speed: 0 };
+    const clearWalk = { sidewalk: 0, crossings: 0, speed: 0 };
+    const gapPreferred = scoreLiveRisk(sidewalkGap, 0, defaults, true).risk;
+    const busyPreferred = scoreLiveRisk(clearWalk, 0.7, defaults, true).risk;
+    const gapRelaxed = scoreLiveRisk(sidewalkGap, 0, defaults, false).risk;
+    const busyRelaxed = scoreLiveRisk(clearWalk, 0.7, defaults, false).risk;
+    expect(busyPreferred).toBeGreaterThan(gapPreferred);
+    expect(busyRelaxed).toBeLessThan(gapRelaxed);
+    expect(
+      [gapPreferred, busyPreferred, gapRelaxed, busyRelaxed].every(
+        (score) => score >= 0 && score <= 100,
+      ),
+    ).toBe(true);
+  });
+
   it("recognizes a mapped sidewalk and signalized crossing", () => {
     const result = osmAttributeFeatures([
       {
