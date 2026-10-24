@@ -51,6 +51,11 @@ try {
     },
     crossings: [
       {
+        coordinate: [-84.3774, 33.78632],
+        marked: true,
+        signalized: true,
+      },
+      {
         coordinate: crossingCoordinate,
         marked: false,
         signalized: false,
@@ -106,6 +111,7 @@ try {
     .getByRole("button", { name: /Test High School/ })
     .click();
   await expect(page.locator(".route-card")).toBeVisible();
+  await expect(page.locator(".crossing-marker")).toHaveCount(0);
   await expect(page.locator(".route-refining")).toHaveCount(0);
   await expect(page.locator(".route-stats")).toContainText("0.75 mi");
   await page.waitForTimeout(800);

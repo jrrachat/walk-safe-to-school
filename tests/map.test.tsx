@@ -290,7 +290,7 @@ it("draws sidewalk stretches and points speed warnings at the road", () => {
     mock.layers.find((layer) => layer.id === "suspected-unmarked-crossings")
       ?.paint?.["line-width"],
   ).toBe(10);
-  expect(document.querySelectorAll(".crossing-marker")).toHaveLength(1);
+  expect(document.querySelectorAll(".crossing-marker")).toHaveLength(0);
   const crossingWarning = document.querySelector<HTMLElement>(
     ".crossing-warning-marker",
   );
@@ -306,23 +306,6 @@ it("draws sidewalk stretches and points speed warnings at the road", () => {
   expect(document.querySelector(".speed-warning-limit")?.textContent).toBe(
     "40 mph",
   );
-  const walkingMarker = document.querySelector<HTMLElement>(".crossing-marker");
-  expect(walkingMarker?.querySelector(".crossing-marker-tooltip")?.textContent).toBe(
-    "Mapped signalized crosswalk",
-  );
-  expect(walkingMarker?.querySelector("svg")).not.toBeNull();
-  fireEvent.click(walkingMarker!);
-  expect(walkingMarker?.getAttribute("aria-expanded")).toBe("true");
-  expect(walkingMarker?.getAttribute("aria-label")).toContain(
-    "Mapped signalized crosswalk",
-  );
-  expect(
-    Number.parseInt(
-      walkingMarker?.style
-        .getPropertyValue("--crossing-marker-size")
-        .replace("px", "") || "22",
-    ),
-  ).toBeLessThanOrEqual(22);
   const sidewalkPin = document.querySelector<HTMLElement>(".sidewalk-warning");
   expect(
     sidewalkPin?.querySelector(".sidewalk-warning-icon")?.textContent,

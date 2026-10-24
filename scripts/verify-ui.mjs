@@ -273,44 +273,7 @@ try {
   await sidewalkFactor.uncheck();
   await expect(sidewalkFactor).not.toBeChecked();
   await expect(page.locator(".route-card")).toHaveCount(1, { timeout: 30000 });
-  const confirmedCrossings = page.locator(".crossing-marker");
-  expect(
-    (await confirmedCrossings.allTextContents()).every((label) => label === ""),
-  ).toBe(true);
-  expect(
-    await confirmedCrossings.evaluateAll((markers) =>
-      markers.every(
-        (marker) =>
-          marker.querySelector("svg") &&
-          marker.getAttribute("aria-label")?.startsWith("Mapped "),
-      ),
-    ),
-  ).toBe(true);
-  const walkingMarkerBoxes = await page
-    .locator(".crossing-marker:visible")
-    .evaluateAll((markers) =>
-      markers.map((marker) => {
-        const box = marker.getBoundingClientRect();
-        return {
-          left: box.left,
-          right: box.right,
-          top: box.top,
-          bottom: box.bottom,
-        };
-      }),
-    );
-  for (let first = 0; first < walkingMarkerBoxes.length; first++) {
-    for (let second = first + 1; second < walkingMarkerBoxes.length; second++) {
-      const a = walkingMarkerBoxes[first];
-      const b = walkingMarkerBoxes[second];
-      expect(
-        a.left < b.right &&
-          a.right > b.left &&
-          a.top < b.bottom &&
-          a.bottom > b.top,
-      ).toBe(false);
-    }
-  }
+  await expect(page.locator(".crossing-marker")).toHaveCount(0);
   await expect(page.locator(".map-key")).toHaveAttribute("open", "");
   await expect(
     page.getByText("How to read the map", { exact: true }),
@@ -324,14 +287,8 @@ try {
   await expect(
     page.getByText("Street colors are background only.", { exact: false }),
   ).toBeVisible();
-  await expect(page.locator(".map-key-items > div")).toHaveCount(7);
-  await expect(page.locator(".map-key-walking")).toHaveCount(2);
-  await expect(
-    page.getByText("Mapped crosswalk", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Mapped signalized crosswalk", { exact: true }),
-  ).toBeVisible();
+  await expect(page.locator(".map-key-items > div")).toHaveCount(5);
+  await expect(page.locator(".map-key-walking")).toHaveCount(0);
   await expect(
     page.getByText("Crosswalk not verified", { exact: true }),
   ).toBeVisible();

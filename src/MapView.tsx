@@ -10,7 +10,7 @@ import * as maplibregl from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 // Vite must bundle the separate MapLibre 6 worker, including its imports.
 maplibregl.setWorkerUrl(workerUrl);
-import { ArrowRight, Footprints } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import PlaceIcon from "./PlaceIcon";
 import { displayCrossings, distance } from "../shared/routing";
@@ -539,82 +539,6 @@ export default function MapView({
       queueMicrotask(() => roots.forEach((root) => root.unmount()));
     };
   }, [start, showStart, end, ready, places]);
-  useEffect(() => {
-    const m = map.current;
-    if (!m || !ready || !currentRoute?.crossings?.length) return;
-    const roots: ReturnType<typeof createRoot>[] = [];
-    const crossings = displayCrossings(currentRoute.crossings)
-      .filter((crossing) => crossing.marked === true)
-      .map((crossing) => ({
-        ...crossing,
-        coordinate: pointOnRoute(crossing.coordinate, currentRoute.coordinates),
-      }))
-      .filter(
-        (crossing): crossing is typeof crossing & { coordinate: Coordinate } =>
-          crossing.coordinate !== null,
-      )
-      .sort((a, b) => Number(b.signalized) - Number(a.signalized));
-    const records = crossings.map((crossing, index) => {
-      const element = document.createElement("button");
-      element.type = "button";
-      element.className =
-        "crossing-marker" + (crossing.signalized ? " signalized" : "");
-      const label = crossing.signalized
-        ? "Mapped signalized crosswalk"
-        : "Mapped crosswalk";
-      element.setAttribute("aria-label", label + " " + (index + 1));
-      element.setAttribute("aria-expanded", "false");
-      element.addEventListener("click", (event) => {
-        event.stopPropagation();
-        element.classList.toggle("expanded");
-        element.setAttribute(
-          "aria-expanded",
-          String(element.classList.contains("expanded")),
-        );
-      });
-      const root = createRoot(element);
-      root.render(
-        <>
-          <Footprints aria-hidden="true" strokeWidth={2.4} />
-          <span className="crossing-marker-tooltip" aria-hidden="true">
-            {label}
-          </span>
-        </>,
-      );
-      roots.push(root);
-      const marker = new maplibregl.Marker({ element, anchor: "center" })
-        .setLngLat(crossing.coordinate)
-        .addTo(m);
-      return { crossing, element, marker };
-    });
-    const updateMarkerLayout = () => {
-      const zoom = m.getZoom();
-      const size = Math.max(15, Math.min(22, Math.round(16 + (zoom - 13) * 2)));
-      const visible: { x: number; y: number }[] = [];
-      for (const record of records) {
-        record.element.style.setProperty("--crossing-marker-size", size + "px");
-        const point = m.project(record.crossing.coordinate);
-        positionMarkerTooltip(
-          record.element,
-          point,
-          container.current?.clientWidth || 0,
-        );
-        const overlaps = visible.some(
-          (candidate) =>
-            Math.hypot(candidate.x - point.x, candidate.y - point.y) < size + 4,
-        );
-        record.element.hidden = overlaps;
-        if (!overlaps) visible.push(point);
-      }
-    };
-    updateMarkerLayout();
-    m.on("moveend", updateMarkerLayout);
-    return () => {
-      m.off("moveend", updateMarkerLayout);
-      records.forEach(({ marker }) => marker.remove());
-      roots.forEach((root) => queueMicrotask(() => root.unmount()));
-    };
-  }, [currentRoute, ready, routeDataKey]);
   useEffect(() => {
     const m = map.current;
     if (!m || !ready || !currentRoute?.crossings?.length) return;

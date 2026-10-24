@@ -265,27 +265,6 @@ main {
 .map-key-line.sidewalk {
   border-top: 4px dashed #c85524;
 }
-.map-key-walking {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  justify-self: center;
-  box-sizing: border-box;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-  padding: 4px;
-  background: #fff;
-  color: #145cdb;
-  box-shadow: 0 1px 4px rgba(30, 51, 77, 0.22);
-}
-.map-key-walking svg {
-  width: 100%;
-  height: 100%;
-}
-.map-key-walking.signalized {
-  color: #26845d;
-}
 .map-key-alert {
   display: grid;
   width: 24px;
@@ -1421,61 +1400,6 @@ select {
   }
 }
 
-.crossing-marker {
-  position: relative;
-  z-index: 5;
-  display: grid;
-  width: var(--crossing-marker-size, 19px);
-  height: var(--crossing-marker-size, 19px);
-  place-items: center;
-  box-sizing: border-box;
-  border: 1.5px solid #145cdb;
-  border-radius: 50%;
-  padding: 3px;
-  background: #fff;
-  color: #145cdb;
-  box-shadow: 0 1px 5px rgba(30, 51, 77, 0.3);
-}
-.crossing-marker[hidden] {
-  display: none;
-}
-.crossing-marker svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.crossing-marker.signalized {
-  border-color: #26845d;
-  color: #26845d;
-}
-.crossing-marker-tooltip {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  display: none;
-  width: max-content;
-  max-width: min(220px, 70vw);
-  padding: 7px 10px;
-  border: 1px solid #9bb2ca;
-  border-radius: 8px;
-  background: #fff;
-  color: #172b44;
-  box-shadow: 0 4px 14px rgba(25, 54, 86, 0.22);
-  font:
-    700 12px/1.35 Arial,
-    sans-serif;
-  text-align: center;
-  pointer-events: none;
-  transform: translateX(-50%);
-}
-.crossing-marker:is(:hover, :focus-visible, .expanded) {
-  z-index: 30;
-  background: #fff;
-}
-.crossing-marker:is(:hover, :focus-visible, .expanded)
-  .crossing-marker-tooltip {
-  display: block;
-}
 .crossing-warning-marker {
   position: relative;
   z-index: 7;
@@ -1669,19 +1593,16 @@ button.crossing-warning-marker.likely:is(:hover, :focus-visible, .expanded):not(
   pointer-events: none;
 }
 
-.tooltip-below .crossing-marker-tooltip,
 .tooltip-below .crossing-warning-detail,
 .tooltip-below .sidewalk-warning-detail {
   top: calc(100% + 9px);
   bottom: auto;
 }
-.tooltip-left .crossing-marker-tooltip,
 .tooltip-left .crossing-warning-detail,
 .tooltip-left .sidewalk-warning-detail {
   left: 0;
   transform: none;
 }
-.tooltip-right .crossing-marker-tooltip,
 .tooltip-right .crossing-warning-detail,
 .tooltip-right .sidewalk-warning-detail {
   left: auto;

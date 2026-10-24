@@ -21,7 +21,7 @@ The API process needs outbound HTTPS access to the school directory, geocoder, a
 
 If the live school directory or routing provider is unavailable, the app shows an error instead of presenting demo data as a real walking route. Route downloads still work when map tiles fail, but the exported image warns that it contains only the route line and cannot be used for navigation.
 
-The app shows one completed route after checking candidates; it does not silently switch routes afterward. The blue line is the walk. Orange dashes mean sidewalk data is missing. Blue or green footprints mark mapped crosswalks. Orange and red warnings flag places to inspect on the map. When no candidate passes every selected check, the best walkable route appears with warnings. The in-app **Docs** panel lists data sources and scoring rules.
+The app shows one completed route after checking candidates; it does not silently switch routes afterward. The blue line is the walk. Orange dashes mean sidewalk data is missing. Orange and red warnings flag places to inspect on the map. When no candidate passes every selected check, the best walkable route appears with warnings. The in-app **Docs** panel lists data sources and scoring rules.
 
 ## Download a route
 

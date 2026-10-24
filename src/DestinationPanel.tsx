@@ -1,4 +1,4 @@
-import { Check, Download, Footprints, Home } from "lucide-react";
+import { Check, Download, Home } from "lucide-react";
 import { useState } from "react";
 import type { Place } from "../shared/demo";
 import {
@@ -185,27 +185,6 @@ export default function DestinationPanel(p: Props) {
                   <span>
                     <strong>Orange S</strong>
                     <small>Tap for sidewalk details</small>
-                  </span>
-                </div>
-                <div>
-                  <span className="map-key-walking marked" aria-hidden="true">
-                    <Footprints aria-hidden="true" strokeWidth={2.4} />
-                  </span>
-                  <span>
-                    <strong>Blue footprints</strong>
-                    <small>Mapped crosswalk</small>
-                  </span>
-                </div>
-                <div>
-                  <span
-                    className="map-key-walking signalized"
-                    aria-hidden="true"
-                  >
-                    <Footprints aria-hidden="true" strokeWidth={2.4} />
-                  </span>
-                  <span>
-                    <strong>Green footprints</strong>
-                    <small>Mapped signalized crosswalk</small>
                   </span>
                 </div>
                 <div>
