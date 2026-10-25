@@ -1,4 +1,4 @@
-import { Footprints, Info, X } from "lucide-react";
+import { Footprints, Github, Info, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import MapView from "./MapView";
 import BottomSheet, { type SheetState } from "./BottomSheet";
@@ -476,6 +476,16 @@ export default function App() {
           />
         </section>
       </main>
+      <a
+        className="github-link"
+        href="https://github.com/jrrachat/walkwise"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="View Walkwise on GitHub"
+      >
+        <Github size={17} aria-hidden="true" />
+        <span>GitHub</span>
+      </a>
       {notice && (
         <div className="toast" role="status">
           {notice}

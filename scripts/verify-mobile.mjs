@@ -117,6 +117,13 @@ try {
   await page.waitForTimeout(800);
   expect(routeRequests).toBe(1);
   await expect(page.locator(".brand-name")).toHaveText("Walkwise Atlanta");
+  const githubLink = page.getByRole("link", {
+    name: "View Walkwise on GitHub",
+  });
+  await expect(githubLink).toHaveAttribute(
+    "href",
+    "https://github.com/jrrachat/walkwise",
+  );
   for (const [width, height] of [
     [320, 568],
     [390, 844],
@@ -127,6 +134,10 @@ try {
     await page.setViewportSize({ width, height });
     await page.waitForTimeout(500);
     await expect(page.locator(".planner")).toBeVisible();
+    const github = await githubLink.boundingBox();
+    expect(github).not.toBeNull();
+    expect(github.x + github.width).toBeLessThanOrEqual(width);
+    expect(github.y + github.height).toBeLessThanOrEqual(height);
     const brand = await page.locator(".brand").boundingBox();
     const docsButton = await page
       .getByRole("button", { name: "About routes and data" })

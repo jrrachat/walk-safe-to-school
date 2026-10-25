@@ -164,6 +164,33 @@ main {
   background: #e8eef1;
   overflow: hidden;
 }
+.github-link {
+  position: fixed;
+  z-index: 8;
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid #d9e3ed;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 3px 12px rgba(28, 54, 84, 0.13);
+  color: #34465b;
+  font-size: 12px;
+  font-weight: 700;
+}
+.github-link:hover {
+  color: #123e86;
+  background: #eaf2ff;
+}
+.planner .panel-scroll {
+  height: calc(100% - 64px - env(safe-area-inset-bottom, 0px));
+  border-bottom: 1px solid #e7ebef;
+}
 .map-container,
 .map {
   position: absolute;
@@ -1010,6 +1037,10 @@ select {
   }
 }
 @media (max-width: 900px) {
+  main[data-sheet="collapsed"] ~ .github-link {
+    right: max(58px, env(safe-area-inset-right, 0px));
+    bottom: calc(144px + env(safe-area-inset-bottom, 0px));
+  }
   main[data-tab="docs"] .map-region {
     display: none;
   }
@@ -1185,6 +1216,8 @@ select {
     font-size: 15px;
   }
   .planner[data-sheet="collapsed"] .panel-scroll {
+    height: 100%;
+    border-bottom: 0;
     overflow: hidden;
   }
   .planner[data-sheet="collapsed"] .planner-title {
