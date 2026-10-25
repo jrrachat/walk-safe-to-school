@@ -30,7 +30,8 @@ export default function PlaceSearch({
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false);
   const abort = useRef<AbortController | null>(null),
-    request = useRef(0);
+    request = useRef(0),
+    debounce = useRef<number | null>(null);
   const localMatches = useMemo(
     () =>
       prominent
@@ -42,12 +43,21 @@ export default function PlaceSearch({
         : [],
     [prominent, places, query],
   );
-  useEffect(() => () => abort.current?.abort(), []);
+  useEffect(
+    () => () => {
+      request.current++;
+      abort.current?.abort();
+    },
+    [],
+  );
   useEffect(() => {
     if (!open || query.trim().length < 2) return;
     if (prominent && localMatches.length) return;
-    const timer = window.setTimeout(() => void search(), 300);
-    return () => window.clearTimeout(timer);
+    debounce.current = window.setTimeout(() => void search(), 300);
+    return () => {
+      if (debounce.current !== null) window.clearTimeout(debounce.current);
+      debounce.current = null;
+    };
   }, [open, prominent, query, localMatches]);
   const options = useMemo(() => {
     const list = prominent
@@ -61,9 +71,23 @@ export default function PlaceSearch({
   }, [remote, prominent, localMatches]);
   const showResults =
     options.length > 0 || loading || Boolean(error) || remote !== null;
+  function cancelSearch() {
+    request.current++;
+    abort.current?.abort();
+    if (debounce.current !== null) window.clearTimeout(debounce.current);
+    debounce.current = null;
+    setLoading(false);
+  }
+  function closeSearch() {
+    cancelSearch();
+    setOpen(false);
+    onOpenChange?.(false);
+  }
   async function search() {
     if (query.trim().length < 2) return;
     if (prominent && localMatches.length) return;
+    if (debounce.current !== null) window.clearTimeout(debounce.current);
+    debounce.current = null;
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
@@ -84,7 +108,7 @@ export default function PlaceSearch({
       setRemote(data.places);
       setError(data.message || "");
     } catch (e) {
-      if (!controller.signal.aborted)
+      if (id === request.current && !controller.signal.aborted)
         setError(e instanceof Error ? e.message : "Search unavailable");
     } finally {
       if (id === request.current) setLoading(false);
@@ -110,6 +134,7 @@ export default function PlaceSearch({
             }
             value={open ? query : value?.name || ""}
             onFocus={() => {
+              cancelSearch();
               setOpen(true);
               onOpenChange?.(true);
               setQuery("");
@@ -117,17 +142,14 @@ export default function PlaceSearch({
               setError("");
             }}
             onChange={(e) => {
-              request.current++;
-              abort.current?.abort();
-              setLoading(false);
+              cancelSearch();
               setQuery(e.target.value);
               setRemote(null);
               setError("");
             }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
-                setOpen(false);
-                onOpenChange?.(false);
+                closeSearch();
               }
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -138,10 +160,7 @@ export default function PlaceSearch({
           {open ? (
             <button
               aria-label={"Close " + label + " search"}
-              onClick={() => {
-                setOpen(false);
-                onOpenChange?.(false);
-              }}
+              onClick={closeSearch}
             >
               <X size={17} />
             </button>
@@ -164,6 +183,7 @@ export default function PlaceSearch({
             <button
               key={p.id}
               onClick={() => {
+                cancelSearch();
                 onChoose(p);
                 setOpen(false);
                 onOpenChange?.(false);

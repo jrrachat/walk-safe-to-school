@@ -96,6 +96,39 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+it("selects a map point immediately and ignores a late address lookup after closing it", async () => {
+  let finishLookup!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) =>
+      String(input).includes("/api/reverse")
+        ? new Promise<Response>((resolve) => {
+            finishLookup = resolve;
+          })
+        : Promise.reject(new Error("School directory unavailable")),
+    ),
+  );
+  const onPick = vi.fn();
+  const props = {
+    routes: [],
+    selected: "Lower Risk",
+    start: places[0],
+    onPick,
+  };
+  const { rerender } = render(<MapView {...props} />);
+  act(() => {
+    mock.handlers.get("click")?.({ lngLat: { lng: -84.4, lat: 33.8 } });
+  });
+  expect(onPick).toHaveBeenCalledTimes(1);
+  expect(onPick.mock.calls[0][0].name).toBe("Selected location");
+  rerender(<MapView {...props} pickedPlace={null} />);
+  await act(async () => {
+    finishLookup(
+      Response.json({ place: { name: "Baker Street", area: "Atlanta" } }),
+    );
+  });
+  expect(onPick).toHaveBeenCalledTimes(1);
+});
 it("draws the selected route when the style is ready, without waiting for tiles", () => {
   const routes = compareRoutes(
     demoGraph,

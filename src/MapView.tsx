@@ -122,11 +122,15 @@ export default function MapView({
   const container = useRef<HTMLDivElement>(null),
     map = useRef<maplibregl.Map | null>(null);
   const pick = useRef(onPick);
+  const picked = useRef(pickedPlace);
+  const reverseLookup = useRef<AbortController | null>(null);
+  const mapPickId = useRef(0);
   const known = useRef<Place[]>([]);
   const lastAutoFitKey = useRef("");
   const lastRouteDataKey = useRef("");
   known.current = places;
   pick.current = onPick;
+  picked.current = pickedPlace;
   const [ready, setReady] = useState(false),
     [error, setError] = useState("");
   const currentRoute = routes.find((route) => route.category === selected);
@@ -253,6 +257,7 @@ export default function MapView({
         "bottom-right",
       );
       instance.on("click", async (e) => {
+        reverseLookup.current?.abort();
         const coordinate: Coordinate = [e.lngLat.lng, e.lngLat.lat];
         const nearby = known.current.find(
           (place) => distance(place.coordinate, coordinate) < 35,
@@ -261,25 +266,32 @@ export default function MapView({
           pick.current(nearby);
           return;
         }
-        let name = "Selected location";
-        let area = e.lngLat.lat.toFixed(5) + ", " + e.lngLat.lng.toFixed(5);
+        const place: Place = {
+          id: "point-" + Date.now() + "-" + ++mapPickId.current,
+          name: "Selected location",
+          kind: "Map point",
+          coordinate,
+          area: e.lngLat.lat.toFixed(5) + ", " + e.lngLat.lng.toFixed(5),
+        };
+        picked.current = place;
+        pick.current(place);
+        const controller = new AbortController();
+        reverseLookup.current = controller;
         try {
           const response = await fetch(
             "/api/reverse?lat=" + e.lngLat.lat + "&lon=" + e.lngLat.lng,
+            { signal: controller.signal },
           );
           if (response.ok) {
             const result = await response.json();
-            name = result.place.name;
-            area = result.place.area;
+            if (!controller.signal.aborted && picked.current?.id === place.id)
+              pick.current({
+                ...place,
+                name: result.place.name,
+                area: result.place.area,
+              });
           }
         } catch {}
-        pick.current({
-          id: "point-" + Date.now(),
-          name,
-          kind: "Map point",
-          coordinate,
-          area,
-        });
       });
     } catch {
       setError(
@@ -287,6 +299,7 @@ export default function MapView({
       );
     }
     return () => {
+      reverseLookup.current?.abort();
       instance?.remove();
       map.current = null;
       if (exportMap) exportMap.current = null;
