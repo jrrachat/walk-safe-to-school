@@ -172,23 +172,23 @@ main {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  min-height: 42px;
-  padding: 9px 12px;
-  border: 1px solid #d9e3ed;
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 3px 12px rgba(28, 54, 84, 0.13);
-  color: #34465b;
-  font-size: 12px;
+  gap: 10px;
+  min-height: 52px;
+  padding: 12px 17px;
+  border: 1px solid #164488;
+  border-radius: 11px;
+  background: #1d56ad;
+  box-shadow: 0 6px 18px rgba(20, 63, 134, 0.28);
+  color: #fff;
+  font-size: 14px;
   font-weight: 700;
 }
 .github-link:hover {
-  color: #123e86;
-  background: #eaf2ff;
+  color: #fff;
+  background: #123e86;
 }
 .planner .panel-scroll {
-  height: calc(100% - 64px - env(safe-area-inset-bottom, 0px));
+  height: calc(100% - 76px - env(safe-area-inset-bottom, 0px));
   border-bottom: 1px solid #e7ebef;
 }
 .map-container,

@@ -124,6 +124,7 @@ try {
     "href",
     "https://github.com/jrrachat/walkwise",
   );
+  await expect(githubLink).toHaveText("View on GitHub");
   for (const [width, height] of [
     [320, 568],
     [390, 844],
@@ -136,6 +137,7 @@ try {
     await expect(page.locator(".planner")).toBeVisible();
     const github = await githubLink.boundingBox();
     expect(github).not.toBeNull();
+    expect(github.height).toBeGreaterThanOrEqual(52);
     expect(github.x + github.width).toBeLessThanOrEqual(width);
     expect(github.y + github.height).toBeLessThanOrEqual(height);
     const brand = await page.locator(".brand").boundingBox();

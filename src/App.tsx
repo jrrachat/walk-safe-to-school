@@ -483,8 +483,8 @@ export default function App() {
         rel="noopener noreferrer"
         aria-label="View Walkwise on GitHub"
       >
-        <Github size={17} aria-hidden="true" />
-        <span>GitHub</span>
+        <Github size={21} strokeWidth={2.3} aria-hidden="true" />
+        <span>View on GitHub</span>
       </a>
       {notice && (
         <div className="toast" role="status">
