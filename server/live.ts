@@ -157,38 +157,40 @@ export function loadSchools(): Promise<Place[]> {
     schoolPending = fetchSchools().finally(() => {
       schoolPending = null;
     });
+  if (schoolCache.places.length) {
+    void schoolPending.catch(() => {});
+    return Promise.resolve(schoolCache.places);
+  }
   return schoolPending;
 }
 
 async function fetchSchools(): Promise<Place[]> {
   const response = await fetch(directoryUrl, {
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(8000),
     headers: serviceHeaders(),
   });
   if (!response.ok) throw new Error("Live school directory unavailable");
+  const featureSchema = z.object({
+    properties: z.object({
+      OBJECTID: z.number(),
+      NAME: z.string().min(1),
+      Address: z.string().nullish(),
+      City: z.string().nullish(),
+      ZipCode: z.string().nullish(),
+    }),
+    geometry: z.object({
+      type: z.literal("Point"),
+      coordinates: z.tuple([z.number(), z.number()]),
+    }),
+  });
   const payload = z
-    .object({
-      features: z.array(
-        z.object({
-          properties: z.object({
-            OBJECTID: z.number(),
-            Sch_Year: z.string().nullable().optional(),
-            NAME: z.string(),
-            Type: z.string().nullable().optional(),
-            Operator: z.string().nullable().optional(),
-            Address: z.string().nullable().optional(),
-            City: z.string().nullable().optional(),
-            ZipCode: z.string().nullable().optional(),
-          }),
-          geometry: z.object({
-            type: z.literal("Point"),
-            coordinates: z.tuple([z.number(), z.number()]),
-          }),
-        }),
-      ),
-    })
+    .object({ features: z.array(z.unknown()) })
     .parse(await response.json());
   const places = payload.features
+    .flatMap((item) => {
+      const parsed = featureSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    })
     .map((feature): Place => ({
       id: "atl-school-" + feature.properties.OBJECTID,
       name: feature.properties.NAME,
@@ -232,25 +234,73 @@ const photonSchema = z.object({
     }),
   ),
 });
+async function searchPhotonSchools(q: string): Promise<Place[]> {
+  const url = new URL(autocompleteUrl);
+  url.searchParams.set("q", q);
+  url.searchParams.set("limit", "20");
+  url.searchParams.set("lang", "en");
+  url.searchParams.set("bbox", "-84.56,33.65,-84.27,33.92");
+  url.searchParams.set("osm_tag", "amenity:school");
+  const response = await pacedFetch(url, 6000);
+  if (!response.ok) throw new Error("School search unavailable");
+  return photonSchema
+    .parse(await response.json())
+    .features.flatMap((item): Place[] => {
+      if (!item.properties.name) return [];
+      const place: Place = {
+        id:
+          "osm-school-" +
+          (item.properties.osm_type || "place") +
+          "-" +
+          (item.properties.osm_id || item.geometry.coordinates.join("-")),
+        name: item.properties.name,
+        kind: "School",
+        coordinate: item.geometry.coordinates,
+        area:
+          [item.properties.street, item.properties.city, item.properties.state]
+            .filter(Boolean)
+            .join(", ") || "Atlanta area",
+      };
+      return isAtlantaSchool(place) ? [place] : [];
+    });
+}
 export async function searchLocations(q: string, schoolsOnly: boolean) {
   const key = (schoolsOnly ? "school:" : "start:") + q.toLowerCase();
   const cached = searchCache.get(key);
   if (cached && cached.expires > Date.now()) return cached.places;
   let places: Place[];
+  let cacheDuration = 30 * 60 * 1000;
   if (schoolsOnly) {
-    let directory: Place[];
+    const directorySearch = loadSchools().then((directory) =>
+      directory
+        .filter((place) =>
+          (place.name + " " + place.area)
+            .toLowerCase()
+            .includes(q.toLowerCase()),
+        )
+        .slice(0, 20),
+    );
+    const directoryMatch = directorySearch.then((matches) => {
+      if (!matches.length) throw new Error("No directory matches");
+      return matches;
+    });
+    let fallbackTimer: ReturnType<typeof setTimeout>;
+    const fallbackSearch = new Promise<void>((resolve) => {
+      fallbackTimer = setTimeout(resolve, schoolCache.places.length ? 0 : 1200);
+    }).then(async () => {
+      const matches = await searchPhotonSchools(q).catch(() => [] as Place[]);
+      return matches.length ? matches : directorySearch;
+    });
     try {
-      directory = await loadSchools();
-    } catch {
-      if (!schoolCache.places.length)
-        throw new Error("School directory unavailable");
-      directory = schoolCache.places;
+      const result = await Promise.any([
+        directoryMatch.then((matches) => ({ matches, fallback: false })),
+        fallbackSearch.then((matches) => ({ matches, fallback: true })),
+      ]);
+      places = result.matches;
+      if (result.fallback) cacheDuration = 60 * 1000;
+    } finally {
+      clearTimeout(fallbackTimer!);
     }
-    places = directory
-      .filter((place) =>
-        (place.name + " " + place.area).toLowerCase().includes(q.toLowerCase()),
-      )
-      .slice(0, 20);
   } else {
     const url = new URL(autocompleteUrl);
     url.searchParams.set("q", q);
@@ -291,7 +341,7 @@ export async function searchLocations(q: string, schoolsOnly: boolean) {
   }
   if (searchCache.size >= 150)
     searchCache.delete(searchCache.keys().next().value!);
-  searchCache.set(key, { expires: Date.now() + 30 * 60 * 1000, places });
+  searchCache.set(key, { expires: Date.now() + cacheDuration, places });
   return places;
 }
 

@@ -31,32 +31,39 @@ export default function PlaceSearch({
     [loading, setLoading] = useState(false);
   const abort = useRef<AbortController | null>(null),
     request = useRef(0);
+  const localMatches = useMemo(
+    () =>
+      prominent
+        ? places.filter((p) =>
+            (p.name + " " + p.area)
+              .toLowerCase()
+              .includes(query.trim().toLowerCase()),
+          )
+        : [],
+    [prominent, places, query],
+  );
   useEffect(() => () => abort.current?.abort(), []);
   useEffect(() => {
     if (!open || query.trim().length < 2) return;
+    if (prominent && localMatches.length) return;
     const timer = window.setTimeout(() => void search(), 300);
     return () => window.clearTimeout(timer);
-  }, [open, prominent, query]);
+  }, [open, prominent, query, localMatches]);
   const options = useMemo(() => {
-    const list =
-      remote ??
-      (prominent
-        ? places.filter((p) =>
-            (p.name + " " + p.kind + " " + p.area)
-              .toLowerCase()
-              .includes(query.toLowerCase()),
-          )
-        : []);
+    const list = prominent
+      ? [...localMatches, ...(remote || [])]
+      : remote || [];
     return list
       .filter((p) => (prominent ? isAtlantaSchool(p) : true))
       .filter((p, i, a) => a.findIndex((q) => q.id === p.id) === i)
       .sort((a, b) => Number(b.kind === "School") - Number(a.kind === "School"))
       .slice(0, 6);
-  }, [query, remote, prominent, places]);
+  }, [remote, prominent, localMatches]);
   const showResults =
     options.length > 0 || loading || Boolean(error) || remote !== null;
   async function search() {
     if (query.trim().length < 2) return;
+    if (prominent && localMatches.length) return;
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;

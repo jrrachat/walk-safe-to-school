@@ -164,14 +164,9 @@ try {
   expect(map.width / 1440).toBeGreaterThan(0.7);
   expect(map.width / 1440).toBeLessThan(0.75);
   await page.screenshot({ path: ".qa/desktop-search.png" });
-  const automaticSchoolSearch = page.waitForResponse(
-    (response) =>
-      response.url().includes("/api/search?mode=school") && response.ok(),
-  );
   await page
     .getByRole("textbox", { name: "Destination school", exact: true })
     .fill("Washington");
-  await automaticSchoolSearch;
   await expect(
     page
       .locator(".place-results")

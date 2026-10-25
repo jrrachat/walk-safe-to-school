@@ -52,6 +52,10 @@ it("coalesces concurrent school directory loads into one upstream request", asyn
     Response.json({
       features: [
         {
+          properties: { OBJECTID: 0, NAME: null },
+          geometry: null,
+        },
+        {
           properties: { OBJECTID: 1, NAME: "Test School" },
           geometry: { type: "Point", coordinates: [-84.39, 33.78] },
         },
@@ -65,6 +69,33 @@ it("coalesces concurrent school directory loads into one upstream request", asyn
   );
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(results.every((places) => places[0]?.name === "Test School")).toBe(
+    true,
+  );
+});
+
+it("finds schools through the geocoder while the directory is stalled", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("FeatureServer")) return new Promise<Response>(() => {});
+      return Promise.resolve(
+        Response.json({
+          features: [
+            {
+              properties: { osm_id: 42, osm_type: "N", name: "Midtown School" },
+              geometry: { type: "Point", coordinates: [-84.38, 33.78] },
+            },
+          ],
+        }),
+      );
+    }),
+  );
+  const { searchLocations } = await import("../server/live");
+  const results = await searchLocations("Midtown", true);
+  expect(results.map((place) => place.name)).toEqual(["Midtown School"]);
+  const calls = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+  expect(calls.some((url) => url.includes("osm_tag=amenity%3Aschool"))).toBe(
     true,
   );
 });
